@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "present"
+version = "0.1.0"
+description = "Less verbose scientific slide decks with manim + manim-slides"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "manim>=0.19",
+    "manim-slides>=5.5",
+]
+
+[project.optional-dependencies]
+cairosvg = ["cairosvg"]  # fallback SVG rasterizer when neither rsvg-convert nor inkscape is installed
+live = ["polyscope", "qtpy"]  # `present live`: interactive 3D steps
+
+[project.scripts]
+present = "present.render:main"
