@@ -85,6 +85,13 @@ class Viewer(_Viewer):
     def add_points(self, name, positions, colors=None, color=None, radius=0.05, visible=True):
         super().add_points(name, _f32(positions), _f32(colors), color, radius, visible)
 
+    def set_discrete_frames(self, positions=None):
+        super().set_discrete_frames(_f32(positions))
+
+    def reset(self):
+        super().reset()
+        self._numbers = None
+
     def add_coloring(self, name, colors):
         super().add_coloring(name, _f32(colors))
 

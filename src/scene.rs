@@ -65,6 +65,8 @@ pub struct Structure {
     pub backbone_colors: Option<Vec<Rgba>>,
     pub chains: Vec<Vec<usize>>,
     pub excluded: HashSet<(u32, u32)>,
+    /// discrete states of the same atoms (frame-major), an alternative to scrub through
+    pub discrete: Option<Vec<Vec3>>,
 }
 
 impl Structure {
@@ -79,7 +81,19 @@ impl Structure {
     ) -> Self {
         let chains = roles.as_deref().map_or_else(Vec::new, |r| protein::chains(r, &positions[..num_atoms]));
         let excluded = clash::exclusions(num_atoms, &edges);
-        Self { num_atoms, positions, radii, vdw, colors, edges, roles, backbone_colors: None, chains, excluded }
+        Self {
+            num_atoms,
+            positions,
+            radii,
+            vdw,
+            colors,
+            edges,
+            roles,
+            backbone_colors: None,
+            chains,
+            excluded,
+            discrete: None,
+        }
     }
 
     pub fn num_frames(&self) -> usize {
@@ -91,13 +105,18 @@ impl Structure {
         &self.positions[start..start + self.num_atoms]
     }
 
+    pub fn num_discrete_frames(&self) -> usize {
+        self.discrete.as_ref().map_or(0, |d| d.len() / self.num_atoms.max(1))
+    }
+
     fn role(&self, atom: usize) -> Option<u8> {
         self.roles.as_ref().map(|r| r[atom])
     }
 
     /// Center and radius of a sphere holding every atom of every frame.
     pub fn bounds(&self) -> (Vec3, f32) {
-        let (lo, hi) = self.positions.iter().fold(
+        let discrete = self.discrete.iter().flatten();
+        let (lo, hi) = self.positions.iter().chain(discrete.clone()).fold(
             (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
             |(lo, hi), p| (lo.min(*p), hi.max(*p)),
         );
@@ -105,7 +124,7 @@ impl Structure {
             return (Vec3::ZERO, 1.0);
         }
         let center = (lo + hi) / 2.0;
-        let reach = self.positions.iter().map(|p| p.distance(center)).fold(0.0, f32::max);
+        let reach = self.positions.iter().chain(discrete).map(|p| p.distance(center)).fold(0.0, f32::max);
         let largest = self.radii.iter().copied().fold(0.0, f32::max);
         (center, reach + largest)
     }
@@ -187,6 +206,8 @@ pub struct Scene {
     pub ghost: Option<Ghost>,
     pub show_clashes: bool,
     pub clash_overlap: f32,
+    /// the frame index walks the discrete states instead of the path frames
+    pub scrub_discrete: bool,
 }
 
 /// Colors of the non-atom parts of a structure (faded for the ghost).
@@ -222,6 +243,7 @@ impl Default for Scene {
             ghost: None,
             show_clashes: false,
             clash_overlap: 0.4,
+            scrub_discrete: false,
         }
     }
 }
@@ -265,13 +287,29 @@ impl Scene {
         clash::find(positions, &s.vdw, &atoms, &s.excluded, self.clash_overlap)
     }
 
+    /// Positions of `frame` and the path frame it corresponds to: with
+    /// `scrub_discrete`, the discrete states are spread evenly over the path.
+    pub fn frame_positions<'a>(&self, s: &'a Structure, frame: usize) -> (&'a [Vec3], Option<usize>) {
+        match (&s.discrete, self.scrub_discrete) {
+            (Some(discrete), true) => {
+                let count = s.num_discrete_frames();
+                let frame = frame.min(count.saturating_sub(1));
+                let path = (frame as f32 / (count.max(2) - 1) as f32 * (s.num_frames() - 1) as f32).round();
+                (&discrete[frame * s.num_atoms..(frame + 1) * s.num_atoms], Some(path as usize))
+            }
+            _ => (s.frame(frame), None),
+        }
+    }
+
     pub fn geometry(&self, frame: usize) -> Geometry {
         let mut out = Geometry::default();
         let Some(s) = &self.structure else {
             return out;
         };
-        let positions = s.frame(frame);
-        let mut colors = self.atom_colors(s, frame);
+        let (positions, discrete) = self.frame_positions(s, frame);
+        let on_path = discrete.is_none();
+        let path_frame = discrete.unwrap_or(frame);
+        let mut colors = self.atom_colors(s, path_frame);
 
         let clashes = if self.show_clashes { self.clashes(s, positions) } else { vec![] };
         for &(i, j, _) in &clashes {
@@ -307,12 +345,14 @@ impl Scene {
                         self.arrow(*origin, field.scale * *vector, color, &mut out);
                     }
                 }
-                None => {
+                // atom vectors belong to the path frames
+                None if on_path => {
                     let vectors = per_frame(&field.vectors, s.num_atoms, frame);
                     for &a in &marked {
                         self.arrow(positions[a], field.scale * vectors[a], color, &mut out);
                     }
                 }
+                None => {}
             }
         }
         for points in self.points.values().filter(|p| p.visible) {

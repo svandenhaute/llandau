@@ -18,6 +18,10 @@ viewer.add_vectors("tangent", tangents * np.sqrt(atoms), scale=1.5, visible=Fals
 t = np.linspace(0, 1, frames)
 viewer.set_trails(segment_ids=molview.segment_ids(t, np.linspace(0, 1, 7)))
 viewer.set_ghost(positions[-1])
+# every fifth model as "discrete" states: dots, and an alternative to scrub through
+discrete = positions[::5]
+viewer.add_points("discrete", discrete.reshape(-1, 3), color=(0.9, 0.45, 0.1), radius=0.08)
+viewer.set_discrete_frames(discrete)
 viewer.set_visible("clashes", True)
 
 deviation = np.linalg.norm(positions - positions[-1], axis=-1)  # per atom, from the ghost

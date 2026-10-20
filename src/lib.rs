@@ -310,10 +310,68 @@ impl Viewer {
         self.scene.colorings.clear();
         self.scene.coloring = None;
         self.scene.ghost = None;
+        self.scene.scrub_discrete = false;
         self.scene.trails.colors = None;
         self.scene.trails.segment_ids = None;
         self.changed();
         Ok(())
+    }
+
+    /// Discrete states of the same atoms, (states, atoms, 3), to scrub through
+    /// instead of the path frames with `scrub_discrete`. None removes them.
+    #[pyo3(signature = (positions = None))]
+    fn set_discrete_frames(&mut self, positions: Option<PyReadonlyArrayDyn<f32>>) -> PyResult<()> {
+        let num_atoms = self.structure()?.num_atoms;
+        let discrete = positions.map(|p| points(&p, "positions")).transpose()?;
+        if let Some(d) = &discrete
+            && (d.is_empty() || d.len() % num_atoms != 0)
+        {
+            return Err(value_error(format!("discrete frames: expected (states, {num_atoms}, 3)")));
+        }
+        let structure = self.scene.structure.as_mut().unwrap();
+        structure.discrete = discrete;
+        if structure.discrete.is_none() {
+            self.scene.scrub_discrete = false;
+        }
+        self.frame = 0;
+        self.changed();
+        Ok(())
+    }
+
+    #[getter]
+    fn num_discrete_frames(&self) -> usize {
+        self.scene.structure.as_ref().map_or(0, Structure::num_discrete_frames)
+    }
+
+    /// Whether `frame` walks the discrete states (see set_discrete_frames) instead of the
+    /// path frames. Switching keeps the relative position along the path.
+    #[getter]
+    fn scrub_discrete(&self) -> bool {
+        self.scene.scrub_discrete
+    }
+
+    #[setter]
+    fn set_scrub_discrete(&mut self, on: bool) -> PyResult<()> {
+        if on == self.scene.scrub_discrete {
+            return Ok(());
+        }
+        if on && self.num_discrete_frames() == 0 {
+            return Err(runtime_error("no discrete frames; call set_discrete_frames first"));
+        }
+        let old = self.num_frames().max(2) - 1;
+        self.scene.scrub_discrete = on;
+        let new = self.num_frames().max(2) - 1;
+        self.frame = (self.frame as f32 * new as f32 / old as f32).round() as usize;
+        self.changed();
+        Ok(())
+    }
+
+    /// Forget the structure and every layer and setting (the theme stays).
+    fn reset(&mut self) {
+        let theme = self.scene.theme;
+        self.scene = Scene { theme, ..Scene::default() };
+        self.frame = 0;
+        self.changed();
     }
 
     /// Replace the element colors (atoms, 3 or 4).
@@ -343,8 +401,18 @@ impl Viewer {
         Ok(())
     }
 
+    /// Frames that `frame` walks: the path frames, or the discrete states with scrub_discrete.
     #[getter]
     fn num_frames(&self) -> usize {
+        match &self.scene.structure {
+            Some(s) if self.scene.scrub_discrete => s.num_discrete_frames(),
+            Some(s) => s.num_frames(),
+            None => 0,
+        }
+    }
+
+    #[getter]
+    fn num_path_frames(&self) -> usize {
         self.scene.structure.as_ref().map_or(0, Structure::num_frames)
     }
 
@@ -697,7 +765,7 @@ impl Viewer {
     /// Clashing atom pairs (i, j, overlap) in the current frame, among the atoms of the style.
     fn clashes(&self) -> PyResult<Vec<(usize, usize, f32)>> {
         let s = self.structure()?;
-        Ok(self.scene.clashes(s, s.frame(self.frame)))
+        Ok(self.scene.clashes(s, self.scene.frame_positions(s, self.frame).0))
     }
 
     // --- camera ------------------------------------------------------------------

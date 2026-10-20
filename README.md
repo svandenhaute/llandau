@@ -24,6 +24,8 @@ viewer.set_trails(segment_ids=segment_ids(t, spline.segment_boundaries))
 viewer.add_vectors("tangent", tangents, scale=1.5)
 viewer.color_by("kinetic energy", per_atom_values, cmap="fire")   # then viewer.coloring = "kinetic energy"
 viewer.set_ghost(target_positions)            # translucent, in the same style
+viewer.set_discrete_frames(states)            # (states, atoms, 3): same atoms, e.g. the discrete trajectory
+viewer.scrub_discrete = True                  # `frame` now walks those states instead of the path
 viewer.frame = 30
 image = viewer.render_image(800, 600)         # (600, 800, 4) uint8
 explore(viewer, plots={"action": action}, t=t)

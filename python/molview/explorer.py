@@ -97,7 +97,7 @@ class Explorer(QWidget):
         self.view = ViewerWidget(viewer=viewer)
         self.view.setMinimumSize(500, 400)
         self.viewer = viewer
-        frames = max(viewer.num_frames, 1)
+        frames = max(viewer.num_path_frames, 1)
         self.t = np.arange(frames, dtype=float) if t is None else np.asarray(t, float)
 
         panel = QWidget()
@@ -114,11 +114,16 @@ class Explorer(QWidget):
         self.play = QPushButton("Play", checkable=True)
         self.play.toggled.connect(lambda on: self.timer.start() if on else self.timer.stop())
         self.timer = QTimer(self, interval=33)
-        self.timer.timeout.connect(lambda: self.slider.setValue((self.slider.value() + 1) % frames))
+        self.timer.timeout.connect(lambda: self.slider.setValue((self.slider.value() + 1) % (self.slider.maximum() + 1)))
         self.frame_label = QLabel()
         row = QHBoxLayout()
         row.addWidget(self.play)
         row.addWidget(self.frame_label)
+        if viewer.num_discrete_frames:
+            # walk the discrete states instead of the path frames
+            discrete = QCheckBox("scrub discrete", checked=viewer.scrub_discrete)
+            discrete.toggled.connect(self.set_scrub_discrete)
+            row.addWidget(discrete)
         form.addRow("frame", self.slider)
         form.addRow("", row)
 
@@ -195,13 +200,27 @@ class Explorer(QWidget):
         slider.valueChanged.connect(lambda k: (apply(lo + (hi - lo) * k / steps), self.view.request_render()))
         form.addRow(label, slider)
 
+    def set_scrub_discrete(self, on: bool):
+        self.viewer.scrub_discrete = on  # keeps the relative position
+        frame = self.viewer.frame
+        self.slider.blockSignals(True)
+        self.slider.setMaximum(max(self.viewer.num_frames, 1) - 1)
+        self.slider.blockSignals(False)
+        self.set_frame(frame)
+
+    def current_t(self) -> float:
+        frame = self.viewer.frame
+        if self.viewer.scrub_discrete:  # discrete states spread evenly over the path
+            return float(np.interp(frame / max(self.viewer.num_frames - 1, 1), [0, 1], self.t[[0, -1]]))
+        return float(self.t[min(frame, len(self.t) - 1)])
+
     def set_frame(self, frame: int):
         self.viewer.frame = frame
         if self.slider.value() != frame:
             self.slider.setValue(frame)
-        self.frame_label.setText(f"{frame} / {self.slider.maximum()}")
+        self.frame_label.setText(f"{self.viewer.frame} / {self.slider.maximum()}")
         for plot in self.plots:
-            plot.set_x(float(self.t[min(frame, len(self.t) - 1)]))
+            plot.set_x(self.current_t())
         self.view.request_render()
 
     @staticmethod
