@@ -16,6 +16,8 @@ use crate::scene::{Geometry, LatheInstance, SphereInstance};
 use crate::surface::MeshVertex;
 
 pub const SAMPLES: u32 = 4;
+/// Between the raw table colors (1.0, washed out) and an exact sRGB decode (2.2).
+pub const DEFAULT_COLOR_GAMMA: f32 = 1.6;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 pub struct Gpu {
@@ -158,6 +160,8 @@ pub struct Renderer {
     cone: Mesh,
     slots: HashMap<Slot, Instances>,
     pub background: [f32; 4],
+    /// decoding gamma of the colors (see linear() in the shaders)
+    pub color_gamma: f32,
 }
 
 impl Renderer {
@@ -206,6 +210,7 @@ impl Renderer {
             cone: Mesh::new(device, "cone", &cone_mesh(24)),
             slots: HashMap::new(),
             background: [1.0, 1.0, 1.0, 1.0],
+            color_gamma: DEFAULT_COLOR_GAMMA,
         }
     }
 
@@ -276,7 +281,7 @@ impl Renderer {
             view: camera.view().to_cols_array_2d(),
             proj: camera.projection(aspect).to_cols_array_2d(),
             viewport: [viewport[2], viewport[3], 0.0, 0.0],
-            light: light.extend(0.0).to_array(),
+            light: light.extend(self.color_gamma).to_array(),
         };
         queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
 

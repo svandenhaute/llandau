@@ -497,6 +497,18 @@ impl Viewer {
         Ok(())
     }
 
+    /// How colors from the tables are decoded before lighting: 1 keeps them as
+    /// they are (light, soft), 2.2 decodes sRGB exactly (darker, saturated).
+    #[getter]
+    fn color_gamma(&self) -> f32 {
+        self.renderer.color_gamma
+    }
+
+    #[setter]
+    fn set_color_gamma(&mut self, gamma: f32) {
+        self.renderer.color_gamma = gamma.max(0.1);
+    }
+
     /// "atoms" (ball and stick) or "protein" (backbone tube and side chains; needs roles).
     #[getter]
     fn style(&self) -> &'static str {
@@ -1006,6 +1018,12 @@ impl window::Controls for Viewer {
     }
     fn set_visible(&mut self, layer: &str, visible: bool) {
         let _ = Viewer::set_visible(self, layer, visible);
+    }
+    fn color_gamma(&self) -> f32 {
+        self.renderer.color_gamma
+    }
+    fn set_color_gamma(&mut self, gamma: f32) {
+        Viewer::set_color_gamma(self, gamma)
     }
     fn radius_scale(&self) -> f32 {
         self.scene.radius_scale

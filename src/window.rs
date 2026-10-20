@@ -76,6 +76,8 @@ pub trait Controls {
     /// toggleable layers: (name, visible)
     fn layers(&self) -> Vec<(String, bool)>;
     fn set_visible(&mut self, layer: &str, visible: bool);
+    fn color_gamma(&self) -> f32;
+    fn set_color_gamma(&mut self, gamma: f32);
     fn radius_scale(&self) -> f32;
     fn set_radius_scale(&mut self, scale: f32);
     fn surface_opacity(&self) -> f32;
@@ -448,6 +450,12 @@ impl<V: Explorable> App<'_, V> {
 
         // sizes
         egui::Grid::new("sizes").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+            let mut gamma = controls.color_gamma();
+            ui.label("color depth");
+            if ui.add(egui::Slider::new(&mut gamma, 1.0..=2.4)).changed() {
+                controls.set_color_gamma(gamma);
+            }
+            ui.end_row();
             let mut radius = controls.radius_scale();
             ui.label("atom radius");
             if ui.add(egui::Slider::new(&mut radius, 0.1..=2.0)).changed() {

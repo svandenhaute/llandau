@@ -47,7 +47,9 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4((linear(in.color.rgb) * (0.38 + 0.62 * diffuse) + 0.12 * specular) * rim, in.color.a);
 }
 
-// Colors come in as sRGB (as written in color tables); light and blend in linear.
+// Colors come in as written in the color tables (sRGB-like); the output is
+// sRGB-encoded, so decoding with the gamma in light.w (2.2: exact, 1: none)
+// sets how dark and saturated they come out.
 fn linear(c: vec3<f32>) -> vec3<f32> {
-    return select(pow((c + 0.055) / 1.055, vec3(2.4)), c / 12.92, c <= vec3(0.04045));
+    return pow(max(c, vec3(0.0)), vec3(g.light.w));
 }
