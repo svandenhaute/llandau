@@ -71,13 +71,19 @@ class Color:
             return
         if isinstance(value, str):
             name = value.strip()
-            if name.upper() in _NAMED:
+            if name in _MATPLOTLIB:
+                name = _MATPLOTLIB[name]
+            elif name.upper() in _NAMED:
                 name = _NAMED[name.upper()]
             h = name.lstrip("#")
             if len(h) == 3:
                 h = "".join(c * 2 for c in h)
             if len(h) not in (6, 8) or not re.fullmatch(r"[0-9a-fA-F]+", h):
-                raise ValueError(f"not a color: {value!r}")
+                rgba = _matplotlib_color(value)
+                if rgba is None:
+                    raise ValueError(f"not a color: {value!r}")
+                self.rgb, self.alpha = np.array(rgba[:3]), rgba[3] if len(rgba) > 3 else alpha
+                return
             self.rgb = np.array([int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)])
             self.alpha = int(h[6:8], 16) / 255 if len(h) == 8 else alpha
             return
@@ -127,6 +133,27 @@ _NAMED = {
     "ORANGE": "#FF862F", "PURPLE": "#9A72AC", "PINK": "#D147BD", "TEAL": "#5CD0B3",
     "GOLD": "#F0AC5F", "MAROON": "#C55F73",
 }
+# matplotlib's one-letter colors, its cycle (C0...) and common CSS names
+_MATPLOTLIB = {
+    "k": "#000000", "w": "#FFFFFF", "r": "#FF0000", "g": "#008000", "b": "#0000FF", "c": "#00BFBF",
+    "m": "#BF00BF", "y": "#BFBF00",
+    **{f"C{i}": c for i, c in enumerate(["#0074D9", "#E76852", "#63BB8D", "#A03825", "#8E6CC2", "#F2A541",
+                                          "#3CB4C8", "#6F6F6F"])},
+    "black": "#000000", "white": "#FFFFFF", "gray": "#808080", "grey": "#808080", "lightgray": "#D3D3D3",
+    "lightgrey": "#D3D3D3", "darkgray": "#A9A9A9", "darkgrey": "#A9A9A9", "red": "#FF0000", "green": "#008000",
+    "blue": "#0000FF", "orange": "#FFA500", "purple": "#800080", "none": "#00000000",
+}
+
+
+def _matplotlib_color(value):
+    """Any other matplotlib color, when matplotlib is installed."""
+    try:
+        from matplotlib.colors import to_rgba
+        return to_rgba(value)
+    except (ImportError, ValueError):
+        return None
+
+
 WHITE, BLACK, GRAY, GREY = Color("WHITE"), Color("BLACK"), Color("GRAY"), Color("GREY")
 LIGHT_GRAY = LIGHT_GREY = Color("LIGHT_GRAY")
 DARK_GRAY = DARK_GREY = Color("DARK_GRAY")

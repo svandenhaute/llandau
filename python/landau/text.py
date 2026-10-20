@@ -33,15 +33,15 @@ _MATH = re.compile(r"(?<!\\)\$")
 
 
 def text(s: str, size: float = BODY, color=None, weight=NORMAL, slant=NORMAL,
-         typst_markup: bool | None = None, **kwargs):
+         typst_markup: bool | None = None, font: str | None = None, **kwargs):
     """Single text object, typeset with Typst. Contains unescaped $...$ -> the string is Typst
     markup (so *, _, #, ~ have their Typst meaning there; force either way with typst_markup=).
-    A literal dollar is \\$. Lines break only at explicit newlines."""
+    A literal dollar is \\$. Lines break only at explicit newlines. font: other than the deck's."""
     if typst_markup is None:
         typst_markup = bool(_MATH.search(s))
     if typst_markup:
-        return typst(s, size=size, color=color, weight=weight, slant=slant, **kwargs)
-    mob = typst(_plain(s), size=size, color=color, weight=weight, slant=slant, **kwargs)
+        return typst(s, size=size, color=color, weight=weight, slant=slant, font=font, **kwargs)
+    mob = typst(_plain(s), size=size, color=color, weight=weight, slant=slant, font=font, **kwargs)
     mob.plain_text = True
     return mob
 
@@ -61,18 +61,21 @@ def eq(s: str, size: float = BODY, **kwargs):
     return typst(f"$ {s} $", size=size, **kwargs)
 
 
-def typst(src: str, size: float = BODY, color=None, weight=NORMAL, slant=NORMAL, **kwargs) -> SVGMobject:
+def typst(src: str, size: float = BODY, color=None, weight=NORMAL, slant=NORMAL, font: str | None = None,
+          **kwargs) -> SVGMobject:
     """Arbitrary Typst markup as a vector mobject, in the deck font and colour.
     Colours set inside the markup are kept; kwargs go to SVGMobject."""
-    return SVGMobject(str(_compile(_document(src, size, color, weight, slant))), height=None, **kwargs).scale(TYPST_SCALE)
+    doc = _document(src, size, color, weight, slant, font)
+    return SVGMobject(str(_compile(doc)), height=None, **kwargs).scale(TYPST_SCALE)
 
 
-def texts(strings, size: float = BODY, color=None, weight=NORMAL, slant=NORMAL, **kwargs) -> list[SVGMobject]:
+def texts(strings, size: float = BODY, color=None, weight=NORMAL, slant=NORMAL, font: str | None = None,
+          **kwargs) -> list[SVGMobject]:
     """text() of each string, typeset in one Typst run (e.g. tick labels)."""
     sources = [s if _MATH.search(s) else _plain(s) for s in strings]
     if not sources:
         return []
-    doc = _document("\n#pagebreak()\n".join(sources), size, color, weight, slant)
+    doc = _document("\n#pagebreak()\n".join(sources), size, color, weight, slant, font)
     out = []
     for s, path in zip(strings, _compile_pages(doc, len(sources))):
         mob = SVGMobject(str(path), height=None, **kwargs).scale(TYPST_SCALE)
@@ -85,11 +88,11 @@ def _plain(s: str) -> str:
     return " \\\n".join(_typst_string(line) for line in s.replace(r"\$", "$").split("\n"))
 
 
-def _document(src: str, size, color, weight, slant) -> str:
+def _document(src: str, size, color, weight, slant, font=None) -> str:
     fonts = ", ".join(f'"{f}"' for f in _math_fonts())
     return "\n".join([
         "#set page(width: auto, height: auto, margin: 0pt, fill: none)",
-        f'#set text(font: "{FONT}", size: {size}pt, fill: rgb("{ManimColor(color or theme.current().fg).to_hex()}"),'
+        f'#set text(font: "{font or FONT}", size: {size}pt, fill: rgb("{ManimColor(color or theme.current().fg).to_hex()}"),'
         f' weight: "{"bold" if weight == BOLD else "regular"}", style: "{"italic" if slant == ITALIC else "normal"}")',
         f"#show math.equation: set text(font: ({fonts},))",
         TYPST_PREAMBLE,

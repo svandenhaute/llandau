@@ -31,6 +31,9 @@ from .mobject import DOWN, LEFT, ORIGIN, PI, RIGHT, UP, Color, Group, ImageMobje
 
 __all__ = ["Plot", "COLORS", "colormap"]
 
+# polylines keep their points to within this many points (print size)
+SIMPLIFY = 0.02
+
 # the color cycle
 COLORS = ["#0074D9", "#E76852", "#63BB8D", "#A03825", "#8E6CC2", "#F2A541", "#3CB4C8", "#6F6F6F"]
 
@@ -181,6 +184,30 @@ def _clip_polygon(points: np.ndarray, box) -> np.ndarray:
     return np.array(poly)
 
 
+def simplify(points: np.ndarray, tolerance: float) -> np.ndarray:
+    """Ramer-Douglas-Peucker: the polyline's points within `tolerance` of it."""
+    points = np.asarray(points, dtype=float)
+    if len(points) < 3 or tolerance <= 0:
+        return points
+    keep = np.zeros(len(points), dtype=bool)
+    keep[0] = keep[-1] = True
+    stack = [(0, len(points) - 1)]
+    while stack:
+        a, b = stack.pop()
+        if b <= a + 1:
+            continue
+        p, q = points[a], points[b]
+        d = q - p
+        n = np.hypot(*d)
+        mid = points[a + 1:b]
+        dist = np.abs(d[0] * (mid[:, 1] - p[1]) - d[1] * (mid[:, 0] - p[0])) / n if n > 0 else np.hypot(*(mid - p).T)
+        k = int(np.argmax(dist))
+        if dist[k] > tolerance:
+            keep[a + 1 + k] = True
+            stack += [(a, a + 1 + k), (a + 1 + k, b)]
+    return points[keep]
+
+
 def _corners(points: np.ndarray, closed: bool = False) -> np.ndarray:
     """Cubic curves (4 points each) along a polyline (n, 2) -> (4(n-1), 3)."""
     p = np.asarray(points, dtype=float)
@@ -318,12 +345,13 @@ class Plot(VGroup):
     ticks, labels); its commands return artists to reveal separately."""
 
     # copies (e.g. by animations) draw the same artists
-    _shared_attributes = ("artists", "_groups", "region", "_colorbar")
+    _shared_attributes = ("artists", "_groups", "region", "_colorbar", "_cb")
 
     def __init__(self, region, xlim=None, ylim=None, xlabel=None, ylabel=None, title=None, xscale: str = "linear",
                  yscale: str = "linear", grid: bool = False, xticks=None, yticks=None, xticklabels=None,
                  yticklabels=None, aspect="auto", scale: float = 2.0, fontsize: float | None = None, color=None,
-                 box: bool = True, ticks: str = "in", style: dict | None = None):
+                 box: bool = True, ticks: str = "in", style: dict | None = None, tick_fontsize: float | None = None,
+                 legend_fontsize: float | None = None, font: str | None = None, background=None):
         super().__init__()
         from .theme import SMALL
         self.region = region
@@ -336,8 +364,12 @@ class Plot(VGroup):
         self.aspect = aspect
         self.scale_factor = scale
         self.fontsize = fontsize or SMALL
+        self.tick_fontsize = tick_fontsize or 0.85 * self.fontsize
+        self.legend_fontsize = legend_fontsize or 0.8 * self.fontsize
+        self.font = font
         self.fg = Color(color) if color is not None else Color(theme.current().fg)
-        self.bg = Color(theme.current().bg)
+        # legend background
+        self.bg = Color(background) if background is not None else Color(theme.current().bg)
         self.box_on = box
         self.tick_direction = ticks
         self.rc = {**STYLE, **(style or {})}
@@ -439,28 +471,30 @@ class Plot(VGroup):
         rc = self.rc
         r = self.region
         xlim, ylim = self._limits(0), self._limits(1)
-        tick_size = 0.85 * self.fontsize
+        tick_size = self.tick_fontsize
         # ticks need lengths; first guess the box
         font = tick_size / 72
         xt, xminor, xlabels, xpower = self._ticks(0, *xlim, r.width * 0.85, font)
         yt, yminor, ylabels, ypower = self._ticks(1, *ylim, r.height * 0.8, font)
-        labels = texts(xlabels + ylabels, size=tick_size, color=self.fg)
+        labels = texts(xlabels + ylabels, size=tick_size, color=self.fg, font=self.font)
         xl, yl = labels[: len(xlabels)], labels[len(xlabels):]
         pad = self.pt(rc["xtick.major.pad"])
         labelpad = self.pt(rc["axes.labelpad"])
         out_tick = self.pt(rc["xtick.major.size"]) if self.tick_direction == "out" else 0.0
-        x_title = text(self.xlabel, size=self.fontsize, color=self.fg) if self.xlabel else None
-        y_title = text(self.ylabel, size=self.fontsize, color=self.fg).rotate(PI / 2) if self.ylabel else None
-        title = text(self.title_text, size=self.fontsize, color=self.fg) if self.title_text else None
-        tick_h = max((m.height for m in xl), default=0)
+        x_title = self._text(self.xlabel) if self.xlabel else None
+        y_title = self._text(self.ylabel).rotate(PI / 2) if self.ylabel else None
+        title = self._text(self.title_text) if self.title_text else None
+        # matplotlib spaces text by its font box: above the glyphs the ascent, below them the descent
+        ascent, descent = 0.15 * tick_size / 72, 0.25 * tick_size / 72
+        label_ascent, label_descent = 0.15 * self.fontsize / 72, 0.25 * self.fontsize / 72
+        tick_h = max((m.height for m in xl), default=0) + ascent + descent
         tick_w = max((m.width for m in yl), default=0)
-        bottom = out_tick + pad + tick_h + (labelpad + x_title.height if x_title else 0)
-        left = out_tick + pad + tick_w + (labelpad + y_title.width if y_title else 0)
-        top = (title.height + 2 * labelpad) if title else max((m.height for m in yl), default=0) / 2
-        right = max(xl[-1].width / 2 if xl else 0, 0.05)
-        colorbar = self._colorbar
-        if colorbar is not None:
-            right = colorbar["space"]
+        bottom = out_tick + pad + tick_h + (labelpad + label_ascent + x_title.height if x_title else 0)
+        left = out_tick + pad + tick_w + (labelpad + label_descent + y_title.width if y_title else 0)
+        top = (title.height + 2 * labelpad + label_descent) if title else max((m.height for m in yl), default=0) / 2
+        right = max(xl[-1].width / 2 if xl else 0, self.pt(2))
+        if self._colorbar is not None:
+            right = self._colorbar_parts()
         x0, x1 = r.x0 + left, r.x1 - right
         y0, y1 = r.y0 + bottom, r.y1 - top
         if self.aspect == "equal":
@@ -474,6 +508,9 @@ class Plot(VGroup):
             x0, x1, y0, y1 = cx - w / 2, cx + w / 2, cy - h / 2, cy + h / 2
         self.box = (x0, x1, y0, y1)
         self.limits = (xlim, ylim)
+        # data stops at the inner edge of the spines, which it never covers
+        inset = self.pt(rc["axes.linewidth"]) / 2
+        self.clip = (x0 + inset, x1 - inset, y0 + inset, y1 - inset)
 
         self.submobjects = []
         fg, lw_axes = self.fg, self.lw(rc["axes.linewidth"])
@@ -508,32 +545,41 @@ class Plot(VGroup):
             spines.add(Line(corners[k], corners[(k + 1) % 4], color=fg, stroke_width=lw_axes, cap_style="square"))
         frame.add(spines)
         for x, m in zip(xt, xl):
-            m.move_to([self._fx(x), y0 - out_tick - pad, 0], aligned_edge=UP)
+            m.move_to([self._fx(x), y0 - out_tick - pad - ascent, 0], aligned_edge=UP)
         for y, m in zip(yt, yl):
             m.move_to([x0 - out_tick - pad, self._fy(y), 0], aligned_edge=RIGHT)
         numbers = VGroup(*xl, *yl)
         for power, dim in ((xpower, 0), (ypower, 1)):
             if power:
-                factor = text(f"$times 10^({power})$".replace("^(-", "^(−"), size=tick_size, color=self.fg)
+                factor = self._text(f"$times 10^({power})$".replace("^(-", "^(−"), size=tick_size)
                 if dim == 0:
-                    factor.next_to([x1, y0 - out_tick - pad - tick_h, 0], DOWN, buff=pad, aligned_edge=RIGHT)
+                    factor.next_to([x1, y0 - out_tick - pad - tick_h, 0], DOWN, buff=pad, aligned_edge=RIGHT)  # noqa
                 else:
                     factor.move_to([x0, y1 + pad, 0], aligned_edge=DOWN + LEFT)
                 numbers.add(factor)
         frame.add(numbers)
         if x_title:
-            x_title.move_to([(x0 + x1) / 2, y0 - out_tick - pad - tick_h - labelpad, 0], aligned_edge=UP)
+            x_title.move_to([(x0 + x1) / 2, y0 - out_tick - pad - tick_h - labelpad - label_ascent, 0], aligned_edge=UP)
             frame.add(x_title)
         if y_title:
-            y_title.move_to([x0 - out_tick - pad - tick_w - labelpad, (y0 + y1) / 2, 0], aligned_edge=RIGHT)
+            y_title.move_to([x0 - out_tick - pad - tick_w - labelpad - label_descent, (y0 + y1) / 2, 0], aligned_edge=RIGHT)
             frame.add(y_title)
         if title:
-            title.move_to([(x0 + x1) / 2, y1 + labelpad, 0], aligned_edge=DOWN)
+            title.move_to([(x0 + x1) / 2, y1 + labelpad + label_descent, 0], aligned_edge=DOWN)
             frame.add(title)
         self.frame = frame
         self.add(frame)
         for a in self.artists:
             a.draw()
+
+    def _text_room(self) -> float:
+        """Height the x tick labels and x label take below the box (an estimate)."""
+        lines = 1 + (1 if self.xlabel else 0) + (1 if self.title_text else 0)
+        return lines * 1.4 * self.fontsize / 72
+
+    def _text(self, s: str, size: float | None = None):
+        from .text import text
+        return text(s, size=size or self.fontsize, color=self.fg, font=self.font)
 
     def _fx(self, x):
         (lo, hi), (x0, x1) = self.limits[0], self.box[:2]
@@ -579,6 +625,8 @@ class Plot(VGroup):
         return color
 
     def _add(self, artist: Artist) -> Artist:
+        zorder = artist.style.get("zorder")
+        artist.z_index = _ZORDER.get(artist.kind, 2) if zorder is None else zorder
         self.artists.append(artist)
         self._dirty = True
         for g in self._groups:
@@ -595,13 +643,61 @@ class Plot(VGroup):
         finally:
             self._groups.remove(g)
 
-    def set_xlim(self, lo=None, hi=None):
-        self.xlim = (lo, hi)
+    # matplotlib's setters
+    def _set(self, **values):
+        for key, value in values.items():
+            setattr(self, key, value)
         self._dirty = True
+        return self
 
-    def set_ylim(self, lo=None, hi=None):
-        self.ylim = (lo, hi)
-        self._dirty = True
+    def set_xlim(self, left=None, right=None):
+        if isinstance(left, (list, tuple, np.ndarray)):
+            left, right = left
+        return self._set(xlim=(left, right))
+
+    def set_ylim(self, bottom=None, top=None):
+        if isinstance(bottom, (list, tuple, np.ndarray)):
+            bottom, top = bottom
+        return self._set(ylim=(bottom, top))
+
+    def get_xlim(self):
+        self._ensure()
+        return self.limits[0]
+
+    def get_ylim(self):
+        self._ensure()
+        return self.limits[1]
+
+    def set_xlabel(self, label: str):
+        return self._set(xlabel=label)
+
+    def set_ylabel(self, label: str):
+        return self._set(ylabel=label)
+
+    def set_title(self, title: str):
+        return self._set(title_text=title)
+
+    def set_xscale(self, scale: str):
+        return self._set(xscale=scale)
+
+    def set_yscale(self, scale: str):
+        return self._set(yscale=scale)
+
+    def set_xticks(self, ticks, labels=None):
+        return self._set(xticks=ticks, xticklabels=labels)
+
+    def set_yticks(self, ticks, labels=None):
+        return self._set(yticks=ticks, yticklabels=labels)
+
+    def set_aspect(self, aspect):
+        return self._set(aspect=aspect)
+
+    def grid(self, visible: bool = True, **kwargs):
+        if "color" in kwargs:
+            self.rc["grid.color"] = kwargs.pop("color")
+        if "linewidth" in kwargs or "lw" in kwargs:
+            self.rc["grid.linewidth"] = _pop(kwargs, "linewidth", "lw")
+        return self._set(grid_on=visible)
 
     def plot(self, x, y=None, fmt: str | None = None, **kwargs) -> Artist:
         """A line (and markers): color, lw, ls, marker, ms, mfc, mec, mew, alpha, label, zorder."""
@@ -637,7 +733,7 @@ class Plot(VGroup):
             alpha=_pop(kwargs, "alpha", default=None),
         )
         label = _pop(kwargs, "label")
-        _unused(kwargs, "plot")
+        _unused(kwargs, "plot", style)
         data = {"x": x, "y": y, "ex": x, "ey": y, "pts": (x, y)}
         return self._add(Artist(self, "line", data, style, label))
 
@@ -648,7 +744,7 @@ class Plot(VGroup):
         color = _rgba(s["color"], alpha)
         dashes = _DASHES.get(s["ls"], None) if isinstance(s["ls"], str) else s["ls"]
         if dashes != "none":
-            runs = _clip_polyline(pts, self.box)
+            runs = [simplify(run, self.pt(SIMPLIFY)) for run in _clip_polyline(pts, self.clip)]
             if dashes:
                 pattern = [self.pt(v * s["lw"]) for v in dashes]
                 runs = [d_ for run in runs for d_ in _dashes(run, pattern)]
@@ -711,6 +807,8 @@ class Plot(VGroup):
         through cmap); split=True makes one mobject per point (to reveal them in turn)."""
         x, y = np.asarray(x, dtype=float).ravel(), np.asarray(y, dtype=float).ravel()
         color = _pop(kwargs, "color", default=None)
+        linewidths = _pop(kwargs, "linewidth", "lw", default=linewidths)
+        edgecolors = _pop(kwargs, "edgecolor", "ec", default=edgecolors)
         if c is None:
             c = color if color is not None else self._next_color()
         values = None
@@ -723,7 +821,7 @@ class Plot(VGroup):
             lw=linewidths if linewidths is not None else self.rc["lines.markeredgewidth"],
             edge=edgecolors if edgecolors is not None else self.rc["scatter.edgecolors"],
         )
-        _unused(kwargs, "scatter")
+        _unused(kwargs, "scatter", style)
         data = {"x": x, "y": y, "ex": x, "ey": y, "pts": (x, y)}
         return self._add(Artist(self, "scatter", data, style, label))
 
@@ -762,7 +860,7 @@ class Plot(VGroup):
         y2 = np.broadcast_to(np.asarray(y2, dtype=float), x.shape)
         color = color or _pop(kwargs, "facecolor", "fc", default=None) or self._next_color()
         style = dict(color=color, alpha=alpha, lw=_pop(kwargs, "linewidth", default=lw), edge=edgecolor)
-        _unused(kwargs, "fill_between")
+        _unused(kwargs, "fill_between", style)
         data = {"x": x, "y1": y1, "y2": y2, "ex": np.concatenate([x, x]), "ey": np.concatenate([y1, y2])}
         return self._add(Artist(self, "fill", data, style, label))
 
@@ -770,7 +868,7 @@ class Plot(VGroup):
         st, d = a.style, a.data
         top = self._to_frame(d["x"], d["y1"])
         bottom = self._to_frame(d["x"], d["y2"])[::-1]
-        poly = _clip_polygon(np.vstack([top, bottom]), self.box)
+        poly = _clip_polygon(np.vstack([top, bottom]), self.clip)
         if len(poly) < 3:
             return
         color = _rgba(st["color"], st["alpha"] if st["alpha"] is not None else Color(st["color"]).alpha)
@@ -792,7 +890,7 @@ class Plot(VGroup):
                      ls=_pop(kwargs, "ls", "linestyle", default="-"), alpha=_pop(kwargs, "alpha", default=None),
                      dim=dim, value=value, span=(lo, hi))
         label = _pop(kwargs, "label")
-        _unused(kwargs, "axhline" if dim else "axvline")
+        _unused(kwargs, "axhline" if dim else "axvline", style)
         data = {"ex": [value] if dim == 0 else [], "ey": [value] if dim == 1 else []}
         return self._add(Artist(self, "axline", data, style, label))
 
@@ -811,7 +909,7 @@ class Plot(VGroup):
     def _stroke(self, a, pts, st):
         color = _rgba(st["color"], st["alpha"])
         dashes = _DASHES.get(st["ls"]) if isinstance(st["ls"], str) else st["ls"]
-        runs = _clip_polyline(pts, self.box)
+        runs = _clip_polyline(pts, self.clip)
         if dashes and dashes != "none":
             runs = [d for run in runs for d in _dashes(run, [self.pt(v * st["lw"]) for v in dashes])]
         if runs:
@@ -830,7 +928,7 @@ class Plot(VGroup):
         left = x - width / 2 if align == "center" else x
         color = color or self._next_color()
         style = dict(color=color, alpha=alpha, edge=edgecolor, lw=_pop(kwargs, "linewidth", default=lw))
-        _unused(kwargs, "bar")
+        _unused(kwargs, "bar", style)
         data = {"left": left, "width": width, "bottom": bottom, "height": height,
                 "ex": np.concatenate([left, left + width]), "ey": np.concatenate([bottom, bottom + height]),
                 "sticky_y": np.unique(bottom), "pts": (x, bottom + height)}
@@ -842,7 +940,7 @@ class Plot(VGroup):
             else [st["color"]] * len(d["left"])
         for k, (l, w, b, h) in enumerate(zip(d["left"], d["width"], d["bottom"], d["height"])):
             corners = self._to_frame([l, l + w, l + w, l], [b, b, b + h, b + h])
-            poly = _clip_polygon(corners, self.box)
+            poly = _clip_polygon(corners, self.clip)
             if len(poly) < 3:
                 continue
             face = _rgba(colors[k % len(colors)], st["alpha"])
@@ -900,7 +998,7 @@ class Plot(VGroup):
                     across = np.array([cap, 0]) if dim == 1 else np.array([0, cap])
                     for end in (a_, b_):
                         segments.append(np.array([end - across, end + across]))
-        runs = [r for seg in segments for r in _clip_polyline(seg, self.box)]
+        runs = [r for seg in segments for r in _clip_polyline(seg, self.clip)]
         if runs:
             color = _rgba(st["color"], st["alpha"])
             m = VMobject(stroke_color=color, stroke_width=self.lw(st["lw"]), stroke_opacity=color.alpha)
@@ -917,7 +1015,7 @@ class Plot(VGroup):
             extent = (-0.5, cols - 0.5, rows - 0.5, -0.5) if origin == "upper" else (-0.5, cols - 0.5, -0.5, rows - 0.5)
         l, r, b, t = extent
         style = dict(cmap=cmap, vmin=vmin, vmax=vmax, alpha=alpha, origin=origin)
-        _unused(kwargs, "imshow")
+        _unused(kwargs, "imshow", style)
         data = {"Z": Z, "extent": extent, "ex": [l, r], "ey": [b, t], "sticky_x": [l, r], "sticky_y": [b, t]}
         return self._add(Artist(self, "image", data, style, None))
 
@@ -978,7 +1076,7 @@ class Plot(VGroup):
         style = dict(filled=filled, colors=colors, cmap=cmap or ("viridis" if colors is None else None), alpha=alpha,
                      lw=linewidths if linewidths is not None else self.rc["lines.linewidth"] * 0.6, ls=linestyles,
                      vmin=vmin, vmax=vmax)
-        _unused(kwargs, "contour")
+        _unused(kwargs, "contour", style)
         generator = contourpy.contour_generator(X, Y, Z)
         if filled:
             parts = [generator.filled(lo, hi) for lo, hi in zip(levels[:-1], levels[1:])]
@@ -1006,8 +1104,8 @@ class Plot(VGroup):
                 points, offsets = part[0], part[1]
                 for pts, offs in zip(points, offsets):
                     for i0, i1 in zip(offs[:-1], offs[1:]):
-                        ring = self._to_frame(pts[i0:i1, 0], pts[i0:i1, 1])
-                        poly = _clip_polygon(ring, self.box)
+                        ring = simplify(self._to_frame(pts[i0:i1, 0], pts[i0:i1, 1]), self.pt(SIMPLIFY))
+                        poly = _clip_polygon(ring, self.clip)
                         if len(poly) >= 3:
                             curves.append(_corners(poly, closed=True))
                 if curves:
@@ -1016,7 +1114,8 @@ class Plot(VGroup):
                     a.add(m.set_points(np.concatenate(curves)))
             else:
                 for line in part:
-                    runs = _clip_polyline(self._to_frame(line[:, 0], line[:, 1]), self.box)
+                    runs = [simplify(r, self.pt(SIMPLIFY))
+                            for r in _clip_polyline(self._to_frame(line[:, 0], line[:, 1]), self.clip)]
                     curves.extend(_corners(r) for r in runs)
                 if curves:
                     m = VMobject(stroke_color=color, stroke_width=self.lw(st["lw"]), stroke_opacity=color.alpha,
@@ -1025,15 +1124,16 @@ class Plot(VGroup):
                     a.add(m.set_points(np.concatenate(curves)))
 
     def text(self, x, y, s: str, size: float | None = None, color=None, ha: str = "center", va: str = "center",
-             transform: str = "data") -> Artist:
-        style = dict(s=s, size=size, color=color, ha=ha, va=va, transform=transform)
+             transform: str = "data", zorder=None) -> Artist:
+        """Text at data coordinates (transform="axes": fractions of the axes)."""
+        style = dict(s=s, size=size, color=color, ha=ha, va=va, transform=transform, zorder=zorder)
         data = {"x": x, "y": y}
         return self._add(Artist(self, "text", data, style, None))
 
     def _draw_text(self, a: Artist):
         from .text import text
         st, d = a.style, a.data
-        m = text(st["s"], size=st["size"] or self.fontsize, color=st["color"] or self.fg)
+        m = text(st["s"], size=st["size"] or self.fontsize, color=st["color"] or self.fg, font=self.font)
         if st["transform"] == "axes":
             x0, x1, y0, y1 = self.box
             point = np.array([x0 + d["x"] * (x1 - x0), y0 + d["y"] * (y1 - y0), 0])
@@ -1043,8 +1143,11 @@ class Plot(VGroup):
         a.add(m.move_to(point, aligned_edge=edge))
 
     def legend(self, loc: str = "best", fontsize: float | None = None, ncol: int = 1, frameon: bool = True,
-               handles=None) -> Artist:
-        style = dict(loc=loc, fontsize=fontsize, ncol=ncol, frameon=frameon, handles=handles)
+               handles=None, bbox_to_anchor=None, zorder=None) -> Artist:
+        """loc: "best", "upper right", ...; with bbox_to_anchor (x, y in fractions of the
+        axes), the legend's loc corner sits at that point."""
+        style = dict(loc=loc, fontsize=fontsize, ncol=ncol, frameon=frameon, handles=handles,
+                     anchor=bbox_to_anchor, zorder=zorder)
         return self._add(Artist(self, "legend", {}, style, None))
 
     def _draw_legend(self, a: Artist):
@@ -1054,8 +1157,8 @@ class Plot(VGroup):
         entries = [x for x in (st["handles"] or self.artists) if x.label and x.kind != "legend"]
         if not entries:
             return
-        size = st["fontsize"] or 0.8 * self.fontsize
-        labels = texts([e.label for e in entries], size=size, color=self.fg)
+        size = st["fontsize"] or self.legend_fontsize
+        labels = texts([e.label for e in entries], size=size, color=self.fg, font=self.font)
         em = size / 72
         handle_w = 2 * em
         rows = VGroup()
@@ -1066,6 +1169,11 @@ class Plot(VGroup):
         rows.arrange_in_grid(cols=st["ncol"], buff=(0.8 * em, 0.25 * em), cell_alignment=LEFT)
         pad = 0.5 * em
         x0, x1, y0, y1 = self.box
+        if st["anchor"] is not None:
+            # a point in fractions of the axes: the legend's loc corner goes there
+            ax_, ay_ = st["anchor"][:2]
+            x0 = x1 = x0 + ax_ * (self.box[1] - self.box[0])
+            y0 = y1 = y0 + ay_ * (self.box[3] - self.box[2])
         # inside the box by half a font size (matplotlib's borderaxespad)
         x0, x1, y0, y1 = x0 + pad, x1 - pad, y0 + pad, y1 - pad
         w, h = rows.width + 2 * pad, rows.height + 2 * pad
@@ -1078,6 +1186,11 @@ class Plot(VGroup):
         }
         loc = st["loc"]
         if loc == "best":
+            if st["anchor"] is not None:
+                bx0, bx1, by0, by1 = self.box
+                inside = {k: c for k, c in candidates.items() if c[0] - w / 2 >= bx0 - 1e-9 and c[0] + w / 2 <= bx1 + 1e-9
+                          and c[1] - h / 2 >= by0 - 1e-9 and c[1] + h / 2 <= by1 + 1e-9}
+                candidates = inside or candidates
             pts = [x.frame_points() for x in self.artists if x.kind != "legend"]
             pts = np.concatenate(pts) if pts else np.zeros((0, 2))
             pts = pts[np.isfinite(pts).all(axis=1)]
@@ -1119,54 +1232,107 @@ class Plot(VGroup):
         rect.fill_color.alpha = 1
         return rect.shift(np.array([width / 2, 0, 0]))
 
-    def colorbar(self, mappable: Artist, label: str | None = None, width: float = 10, ticks=None) -> Artist:
-        """A color scale right of the plot for a scatter, image or contour artist."""
-        style = dict(mappable=mappable, label=label, width=width, ticks=ticks)
-        from .text import text
-        label_w = text(label, size=self.fontsize).height + self.pt(self.rc["axes.labelpad"]) if label else 0
-        self._colorbar = {"space": self.pt(width) + self.pt(12) + 0.9 + label_w}
+    def colorbar(self, mappable: Artist, label: str | None = None, width: float = 8, ticks=None, format=None,
+                 pad: float = 6, labelpad: float | None = None) -> Artist:
+        """A color scale right of the plot for a scatter, image or contour artist. width, pad
+        (from the axes) and labelpad (from the tick labels) in points; format: e.g. "%.1f"
+        or a function of the value."""
+        labelpad = self.rc["axes.labelpad"] if labelpad is None else labelpad
+        style = dict(mappable=mappable, label=label, width=width, ticks=ticks, format=format, pad=pad,
+                     labelpad=labelpad)
+        artist = Artist(self, "colorbar", {}, style, None)
+        self._colorbar = artist
         self._dirty = True
-        return self._add(Artist(self, "colorbar", {}, style, None))
+        return self._add(artist)
+
+    def _mappable_range(self, m: Artist):
+        st, d = m.style, m.data
+        if m.kind == "contours":
+            levels = d["levels"]
+            return (st["vmin"] if st["vmin"] is not None else levels[0],
+                    st["vmax"] if st["vmax"] is not None else levels[-1])
+        values = st.get("values") if m.kind == "scatter" else d.get("Z")
+        if values is None or np.asarray(values).ndim > 2:
+            return 0.0, 1.0
+        values = np.asarray(values, dtype=float)
+        lo = np.nanmin(values) if st.get("vmin") is None else st["vmin"]
+        hi = np.nanmax(values) if st.get("vmax") is None else st["vmax"]
+        return float(lo), float(hi)
+
+    def _colorbar_parts(self) -> float:
+        """Typeset the colorbar's labels; returns the room it needs right of the box."""
+        st = self._colorbar.style
+        lo, hi = self._mappable_range(st["mappable"])
+        if st["ticks"] is not None:
+            ticks = np.asarray(st["ticks"], dtype=float)
+        else:
+            height = (self.region.height - self._text_room()) * 0.8
+            ticks = nice_ticks(lo, hi, max(3, min(9, int(height / (2 * self.tick_fontsize / 72)))))
+        ticks = ticks[(ticks >= min(lo, hi) - 1e-9) & (ticks <= max(lo, hi) + 1e-9)]
+        fmt = st["format"]
+        if fmt is None:
+            names = tick_labels(ticks)[0]
+        else:
+            names = [fmt(v) if callable(fmt) else fmt % v for v in ticks]
+            names = ["−" + n[1:] if n.startswith("-") else n for n in names]
+        from .text import texts
+        labels = texts(names, size=self.tick_fontsize, color=self.fg, font=self.font)
+        title = self._text(st["label"]).rotate(-PI / 2) if st["label"] else None
+        self._cb = dict(range=(lo, hi), ticks=ticks, labels=labels, title=title)
+        pad, labelpad = self.pt(self.rc["xtick.major.pad"]), self.pt(st["labelpad"])
+        descent = 0.25 * self.fontsize / 72
+        return (self.pt(st["pad"]) + self.pt(st["width"]) + pad + max((l.width for l in labels), default=0)
+                + (labelpad + descent + title.width if title else 0) + self.pt(2))
 
     def _draw_colorbar(self, a: Artist):
-        from .text import text, texts
-        st = a.style
-        m = st["mappable"]
-        if "range" not in m.style:
-            m.draw()
-        lo, hi = m.style.get("range", (0, 1))
-        cmap = m.style.get("cmap") or "viridis"
-        x0, x1, y0, y1 = self.box
-        left = x1 + self.pt(12)
-        width = self.pt(st["width"])
-        ramp = colormap(cmap)(np.linspace(1, 0, 256))[:, None, :].repeat(8, axis=1)
-        image = ImageMobject((ramp * 255).round().astype(np.uint8))
-        image.stretch_to_fit_width(width).stretch_to_fit_height(y1 - y0)
-        image.move_to([left + width / 2, (y0 + y1) / 2, 0])
         from .shapes import Line, Rectangle
-        outline = Rectangle(width=width, height=y1 - y0, color=self.fg, stroke_width=self.lw(self.rc["axes.linewidth"]))
-        outline.move_to(image)
-        a.add(image, outline)
-        ticks = np.asarray(st["ticks"], dtype=float) if st["ticks"] is not None else nice_ticks(lo, hi, 5)
-        ticks = ticks[(ticks >= lo - 1e-9) & (ticks <= hi + 1e-9)]
-        names, power = tick_labels(ticks)
-        labels = texts(names, size=0.85 * self.fontsize, color=self.fg)
+        st, cb = a.style, self._cb
+        m = st["mappable"]
+        lo, hi = cb["range"]
+        x0, x1, y0, y1 = self.box
+        left, width = x1 + self.pt(st["pad"]), self.pt(st["width"])
+        right = left + width
+        ys = lambda v: y0 + (v - lo) / (hi - lo) * (y1 - y0) if hi > lo else (y0 + y1) / 2  # noqa: E731
+        cmap = m.style.get("cmap") or "viridis"
+        if m.kind == "contours" and m.style["filled"]:
+            # one band per level, as contourf
+            levels = m.data["levels"]
+            middles = (levels[:-1] + levels[1:]) / 2
+            colors = colormap(cmap)(np.clip((middles - lo) / (hi - lo), 0, 1)) if hi > lo else colormap(cmap)(middles * 0)
+            alpha = m.style.get("alpha")
+            for (a_, b_), c in zip(zip(levels[:-1], levels[1:]), colors):
+                band = Rectangle(width=width, height=max(ys(b_) - ys(a_), 0), stroke_width=0,
+                                 fill_color=Color(c[:3]), fill_opacity=1 if alpha is None else alpha)
+                a.add(band.move_to([left + width / 2, (ys(a_) + ys(b_)) / 2, 0]))
+        else:
+            ramp = colormap(cmap)(np.linspace(1, 0, 256))[:, None, :].repeat(8, axis=1)
+            image = ImageMobject((ramp * 255).round().astype(np.uint8), opacity=m.style.get("alpha") or 1.0)
+            image.stretch_to_fit_width(width).stretch_to_fit_height(y1 - y0)
+            a.add(image.move_to([left + width / 2, (y0 + y1) / 2, 0]))
+        a.add(Rectangle(width=width, height=y1 - y0, color=self.fg, stroke_width=self.lw(self.rc["axes.linewidth"]))
+              .move_to([left + width / 2, (y0 + y1) / 2, 0]))
         pad = self.pt(self.rc["xtick.major.pad"])
         tick_len = self.pt(self.rc["xtick.major.size"]) * 0.6
-        for v, label in zip(ticks, labels):
-            Y = y0 + (v - lo) / (hi - lo) * (y1 - y0) if hi > lo else (y0 + y1) / 2
-            a.add(Line([left + width, Y, 0], [left + width - tick_len, Y, 0], color=self.fg,
+        for v, label in zip(cb["ticks"], cb["labels"]):
+            Y = ys(v)
+            a.add(Line([right, Y, 0], [right - tick_len, Y, 0], color=self.fg,
                        stroke_width=self.lw(self.rc["xtick.major.width"])))
-            a.add(label.move_to([left + width + pad, Y, 0], aligned_edge=LEFT))
-        if st["label"]:
-            title = text(st["label"], size=self.fontsize, color=self.fg).rotate(-PI / 2)
-            right = max((l.get_right()[0] for l in labels), default=left + width)
-            a.add(title.move_to([right + self.pt(self.rc["axes.labelpad"]), (y0 + y1) / 2, 0], aligned_edge=LEFT))
+            a.add(label.move_to([right + pad, Y, 0], aligned_edge=LEFT))
+        if cb["title"] is not None:
+            edge = max((l.get_right()[0] for l in cb["labels"]), default=right)
+            gap = self.pt(st["labelpad"]) + 0.25 * self.fontsize / 72  # the label's descent faces the ticks
+            a.add(cb["title"].move_to([edge + gap, (y0 + y1) / 2, 0], aligned_edge=LEFT))
 
 
-def _unused(kwargs, command):
-    # zorder and the like have no effect here: drawing order is reveal order
-    for ignored in ("zorder", "rasterized", "clip_on", "solid_capstyle", "antialiased"):
+# matplotlib's default drawing order
+_ZORDER = {"image": 0, "contours": 1, "fill": 1, "bar": 1, "scatter": 1, "line": 2, "axline": 2, "errorbars": 2,
+           "text": 3, "colorbar": 3, "legend": 5}
+
+
+def _unused(kwargs, command, style):
+    """Takes zorder into style; fails on arguments the command does not know."""
+    style["zorder"] = kwargs.pop("zorder", None)
+    for ignored in ("rasterized", "clip_on", "solid_capstyle", "antialiased"):
         kwargs.pop(ignored, None)
     if kwargs:
         raise TypeError(f"{command}() got unknown arguments: {', '.join(sorted(kwargs))}")

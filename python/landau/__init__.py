@@ -20,6 +20,7 @@ modules
     axes       manim's NumberLine, Axes, NumberPlane, ParametricFunction, FunctionGraph
     plot       Plot: matplotlib-style plots of numpy data (plot, scatter, fill_between, bar, hist,
                errorbar, imshow, contour(f), legend, colorbar), revealed in steps
+    figure     subplots, Figure: plots for papers, saved as SVG, PDF or PNG
     theme      DARK / LIGHT, font, type scale (TITLE, BODY, SMALL, LABEL)
     text       text, bold, italic, eq, typst, title, bullets (Typst)
     layout     R (screen regions), place, below/above/left_of/right_of, align, stack, row, gaps XS..XL
@@ -37,6 +38,7 @@ from .animation import *
 from .scene import *
 from .axes import *
 from .plot import *
+from .figure import Figure, subplots
 from .theme import *
 from .layout import *
 from .text import *

@@ -54,6 +54,7 @@ External tools:
 | `scene` | `Scene` (`add play wait next_slide`), updaters, `ValueTracker`, `always_redraw`, `build` |
 | `axes` | manim's `NumberLine Axes NumberPlane ParametricFunction FunctionGraph` |
 | `plot` | `Plot`: matplotlib-style plots of numpy data, revealed in steps |
+| `figure` | `subplots Figure`: plots for papers, saved as SVG, PDF or PNG |
 | `theme` | `DARK`/`LIGHT`, `FONT`, type scale `TITLE BODY SMALL LABEL` |
 | `text` | `text bold italic eq typst title bullets` (Typst) |
 | `layout` | `R` regions (`R.body.left.top`, `hsplit`, `grid`, `right_of(mob)`...), `place`, `below above left_of right_of align stack row`, gaps `XS S M L XL` |
@@ -84,6 +85,33 @@ self.reveal(samples, legend, anim=FadeIn)
 `plot scatter fill_between axhline axvline bar hist errorbar imshow contour contourf text
 legend colorbar`, with matplotlib's arguments; sizes in points (times `scale=2`). `ax.c2p(x, y)`
 places other mobjects at data coordinates.
+
+### Figures for papers
+
+The same plots, saved as files, in print sizes (inches and points) and the thesis
+matplotlibrc style:
+
+```python
+from landau import subplots
+
+fig, ax = subplots(figsize=(3.0, 2.0))                    # inches
+ax.plot(lam, exact, color="k", label="exact")
+ax.plot(lam, ode, color="#b8b8b8", label="ODE ($A -> B$)")
+ax.scatter(lam[i], ode[i], s=20, color=CB0, zorder=50)
+ax.set_xlabel("$lambda_(A -> B)$ [-]")                   # math in Typst syntax
+ax.set_xlim([-1.0, 1.0])
+ax.legend(bbox_to_anchor=(0.5, 1.0))
+fig.savefig("ode.svg")                                    # vector; also .pdf, .png (dpi=)
+```
+
+SVG and PDF are vector, with text as outlines (it looks the same in any document);
+`bbox_inches="tight"` and a transparent background are the defaults. `fig.show()` opens a
+window. `subplots(2, 3)` gives an array of plots; `fig.add(mobject)` puts anything else on the
+figure; `place(fig, R.body, fit="fill")` puts a finished figure on a slide. matplotlib's
+setters work (`set_xlabel set_ylabel set_title set_xlim set_ylim set_xscale set_xticks
+set_aspect grid`), as do `zorder`, `colorbar(..., format="%.1f", labelpad=12)` and colors like
+`"k"`, `"C0"`. Math is Typst's: `$\lambda_{A\rightarrow B}$` becomes `$lambda_(A -> B)$`.
+See `examples/paper_figures.py`.
 
 ### Live 3D steps
 
