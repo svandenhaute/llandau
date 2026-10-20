@@ -1236,28 +1236,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "landau"
-version = "0.2.2"
-dependencies = [
- "bytemuck",
- "egui",
- "egui-wgpu",
- "egui-winit",
- "egui_plot",
- "glam",
- "image",
- "lyon",
- "numpy",
- "png",
- "pollster",
- "pyo3",
- "raw-window-handle",
- "usvg",
- "wgpu",
- "winit",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1320,6 +1298,28 @@ name = "litrs"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4744e383959f0db86ede514b809b1c53251889093803c05267acc7d4e7030d70"
+
+[[package]]
+name = "llandau"
+version = "0.3.0"
+dependencies = [
+ "bytemuck",
+ "egui",
+ "egui-wgpu",
+ "egui-winit",
+ "egui_plot",
+ "glam",
+ "image",
+ "lyon",
+ "numpy",
+ "png",
+ "pollster",
+ "pyo3",
+ "raw-window-handle",
+ "usvg",
+ "wgpu",
+ "winit",
+]
 
 [[package]]
 name = "lock_api"

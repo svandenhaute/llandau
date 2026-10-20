@@ -1,9 +1,9 @@
 """The README deck, with plots drawn from numpy instead of figure files.
 
-    landau play examples/slides.py
+    llandau play examples/slides.py
 """
 import numpy as np
-from landau import *
+from llandau import *
 
 
 class Results(Deck):

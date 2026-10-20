@@ -1,12 +1,12 @@
 [package]
-name = "landau"
-version = "0.2.2"
+name = "llandau"
+version = "0.3.0"
 edition = "2024"
 description = "Smooth scientific slides drawn live, with interactive 3D views of atomic trajectories"
 license = "MIT"
 
 [lib]
-name = "landau"
+name = "llandau"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]

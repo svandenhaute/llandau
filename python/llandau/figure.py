@@ -1,6 +1,6 @@
 """Figures for papers: plots saved as SVG, PDF or PNG, matplotlib style.
 
-    from landau import subplots
+    from llandau import subplots
 
     fig, ax = subplots(figsize=(3.0, 2.0))            # inches
     ax.plot(x, y, color="k", label="exact")

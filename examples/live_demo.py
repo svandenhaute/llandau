@@ -1,10 +1,10 @@
 """Live 3D steps on a light deck: the butane dihedral scan.
 
-    landau play examples/live_demo.py
+    llandau play examples/live_demo.py
 """
 import numpy as np
 from ase.build import molecule
-from landau import *
+from llandau import *
 
 
 def dihedral_scan(num_frames=120):

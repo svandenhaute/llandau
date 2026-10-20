@@ -1,11 +1,11 @@
 import numpy as np
 import pytest
 
-from landau import (
+from llandau import (
     BLACK, BLUE, UP, Create, Deck, Dot, FadeIn, FadeOut, LaggedStart, LIGHT, R, Rectangle, Scene, Square, Transform,
     VGroup, Write, build, place, text,
 )
-from landau.mobject import smooth_handles
+from llandau.mobject import smooth_handles
 
 
 def ink(image) -> float:
@@ -75,8 +75,8 @@ def test_spline_handles_are_manims():
 
 
 def test_plot_steps_and_ticks():
-    from landau import Plot
-    from landau.plot import nice_ticks, tick_labels
+    from llandau import Plot
+    from llandau.plot import nice_ticks, tick_labels
 
     assert list(nice_ticks(0, 10, 5)) == [0, 2, 4, 6, 8, 10]
     assert tick_labels([-0.5, 0, 0.25]) == (["−0.50", "0.00", "0.25"], 0)
@@ -104,7 +104,7 @@ def test_plot_steps_and_ticks():
 
 
 def test_axes_like_manim():
-    from landau import Axes
+    from llandau import Axes
 
     ax = Axes(x_range=[-1, 5, 1], y_range=[-2, 4, 1])
     assert np.allclose(ax.c2p(0, 0), [-4, -1, 0])  # manim's values
@@ -116,7 +116,7 @@ def test_axes_like_manim():
 
 
 def test_live_view_spans_its_step():
-    from landau import live_scene
+    from llandau import live_scene
 
     @live_scene("dot")
     def dot(viewer):

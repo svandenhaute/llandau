@@ -39,10 +39,10 @@ for _prefix, _uri in {
 
 GROUPMODE = f"{{{INK_NS}}}groupmode"
 LABEL = f"{{{INK_NS}}}label"
-PAGE_ID = "landau-page"
+PAGE_ID = "llandau-page"
 NON_DRAWING = {"defs", "metadata", "namedview", "style", "title", "desc", "script"}
 
-CACHE_DIR = Path(os.environ.get("LANDAU_CACHE", ".landau_cache"))
+CACHE_DIR = Path(os.environ.get("LLANDAU_CACHE", ".llandau_cache"))
 _INKSCAPE_MAC = "/Applications/Inkscape.app/Contents/MacOS/inkscape"
 
 

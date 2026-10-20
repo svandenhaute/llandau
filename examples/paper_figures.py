@@ -1,9 +1,9 @@
-"""Paper figures with landau instead of matplotlib: four typical figures, on synthetic data.
+"""Paper figures with llandau instead of matplotlib: four typical figures, on synthetic data.
 
     python examples/paper_figures.py      # ode.svg quasipotentials.svg paths.svg energy.svg/.pdf/.png
 """
 import numpy as np
-from landau import subplots
+from llandau import subplots
 
 CB = ["#1b9e77", "#d95f02", "#7570b3"]
 rng = np.random.default_rng(0)

@@ -3,7 +3,7 @@
 Numbers and axis labels are typeset with Typst (math). Colors default to the
 deck's foreground.
 
-For matplotlib-style plots of data, see landau.plot.
+For matplotlib-style plots of data, see llandau.plot.
 """
 from __future__ import annotations
 

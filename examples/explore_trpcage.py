@@ -3,9 +3,9 @@ import sys
 
 import numpy as np
 
-import landau
-from landau import Viewer, pdb
-from landau.explorer import explore
+import llandau
+from llandau import Viewer, pdb
+from llandau.explorer import explore
 
 positions, numbers, roles = pdb.read(sys.argv[1])
 frames, atoms, _ = positions.shape
@@ -16,7 +16,7 @@ tangents = np.gradient(positions, axis=0)
 tangents /= np.linalg.norm(tangents.reshape(frames, -1), axis=1)[:, None, None]
 viewer.add_vectors("tangent", tangents * np.sqrt(atoms), scale=1.5, visible=False)
 t = np.linspace(0, 1, frames)
-viewer.set_trails(segment_ids=landau.segment_ids(t, np.linspace(0, 1, 7)))
+viewer.set_trails(segment_ids=llandau.segment_ids(t, np.linspace(0, 1, 7)))
 viewer.set_ghost(positions[-1])
 # every fifth model as "discrete" states: dots, and an alternative to scrub through
 discrete = positions[::5]

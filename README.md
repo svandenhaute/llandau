@@ -1,4 +1,4 @@
-# landau
+# llandau
 
 Smooth scientific slides, drawn live. Decks are written like manim scenes (with manim-slides'
 steps), but nothing is rendered ahead: every animation is drawn as it plays (wgpu), so there are
@@ -7,7 +7,7 @@ interactive 3D views of atomic trajectories, splines, tangents and proteins sit 
 slides, and plots come straight from numpy arrays.
 
 ```python
-from landau import *
+from llandau import *
 
 class Results(Deck):
     theme = LIGHT
@@ -24,19 +24,19 @@ The figures above are placeholders; [examples/slides.py](examples/slides.py) is 
 plots drawn from numpy, runnable as is.
 
 ```
-landau play slides.py              # present: arrows step, F full screen, the wheel scrubs
-landau play slides.py --only Results --start 3
-landau pdf slides.py               # one page per step
-landau png slides.py OUT_DIR
+llandau play slides.py              # present: arrows step, F full screen, the wheel scrubs
+llandau play slides.py --only Results --start 3
+llandau pdf slides.py               # one page per step
+llandau png slides.py OUT_DIR
 ```
 
 ## Install
 
-Wheels for macOS and Linux (Python >= 3.10) are on the GitHub releases, as `llandau` (after
-Lev Landau; `landau` on PyPI is another project); it is imported as `landau`:
+Wheels for macOS and Linux (Python >= 3.10) are on the GitHub releases (llandau, after Lev
+Landau: `landau` on PyPI is another project):
 
 ```
-pip install llandau --find-links https://github.com/svandenhaute/landau/releases/expanded_assets/v0.2.2
+pip install llandau --find-links https://github.com/svandenhaute/landau/releases/expanded_assets/v0.3.0
 ```
 
 or build it (needs Rust): `pip install maturin && maturin develop --release`
@@ -46,7 +46,7 @@ External tools:
 - **typst** CLI: all text and math
 - **rsvg-convert** (librsvg) or **Inkscape**: rasterizing layered SVGs (or `pip install cairosvg`)
 - fonts: Linux Biolinum O (text), Libertinus Math (math; falls back to New Computer Modern Math)
-- optional: pillow (`landau pdf | png`), matplotlib (its colormaps), contourpy (contour plots)
+- optional: pillow (`llandau pdf | png`), matplotlib (its colormaps), contourpy (contour plots)
 
 ## Slides
 
@@ -62,7 +62,7 @@ External tools:
 | `theme` | `DARK`/`LIGHT`, `FONT`, type scale `TITLE BODY SMALL LABEL` |
 | `text` | `text bold italic eq typst title bullets` (Typst) |
 | `layout` | `R` regions (`R.body.left.top`, `hsplit`, `grid`, `right_of(mob)`...), `place`, `below above left_of right_of align stack row`, gaps `XS S M L XL` |
-| `media` | `image svg layered_svg`; layered SVGs are split when building, cached in `.landau_cache/` |
+| `media` | `image svg layered_svg`; layered SVGs are split when building, cached in `.llandau_cache/` |
 | `deck` | `Deck` (`step reveal title show_svg live`), `order`, `typewrite` |
 | `live` | `live_scene`, `Deck.live`: interactive 3D on chosen steps |
 
@@ -96,7 +96,7 @@ The same plots, saved as files, in print sizes (inches and points) and the thesi
 matplotlibrc style:
 
 ```python
-from landau import subplots
+from llandau import subplots
 
 fig, ax = subplots(figsize=(3.0, 2.0))                    # inches
 ax.plot(lam, exact, color="k", label="exact")
@@ -121,7 +121,7 @@ See `examples/paper_figures.py`.
 
 ```python
 @live_scene("butane")
-def butane(viewer):                          # a landau.Viewer, in the deck's theme
+def butane(viewer):                          # a llandau.Viewer, in the deck's theme
     viewer.load(positions, numbers)          # (frames, atoms, 3), (atoms,)
 
 class Results(Deck):
@@ -134,7 +134,7 @@ class Results(Deck):
 
 Over a live view: drag rotates, right drag pans, the wheel scrubs frames, pinch zooms; `,` `.`
 step frames, `P` plays, `D` toggles the discrete states, `0` resets the camera. Exports show a
-still image of each live view. See `landau.live` for the view settings.
+still image of each live view. See `llandau.live` for the view settings.
 
 Layer conventions for `show_svg`: steps are ordered by the first number in each Inkscape layer
 label (layers sharing a number appear together), saved visibility is ignored, and layers whose
@@ -143,8 +143,8 @@ label starts with `_` are skipped.
 ## The viewer
 
 ```python
-from landau import Viewer, segment_ids
-from landau.explorer import explore
+from llandau import Viewer, segment_ids
+from llandau.explorer import explore
 
 viewer = Viewer(theme="light").load(positions, numbers, roles=roles)   # (frames, atoms, 3), (atoms,)
 viewer.style = "protein"                      # or "atoms" (ball and stick)
@@ -167,7 +167,7 @@ explore(viewer, plots={"action": action}, t=t)
 Roles (as riemann's `atom_role`): 0 hydrogen, 1 side chain heavy atom, 2 backbone N C O, 3 CA.
 The protein style draws a smooth tube through the CAs and the side chains, no hydrogens;
 trails follow the CAs only. Themes ("light", "dark") set the background and every
-non-element color; element colors come from `landau.elements`.
+non-element color; element colors come from `llandau.elements`.
 
 `explore(viewer, plots=..., t=...)` opens a native window (winit + egui) with the 3D view, a
 panel of controls and plots; it works on macOS, X11 and Wayland. Keys: space plays, `,` `.`
@@ -179,7 +179,7 @@ backend, `Viewer().adapter` tells which GPU is in use.
 python examples/explore_butane.py                     # explorer window
 python examples/explore_trpcage.py 1l2y.pdb           # protein: NMR models as frames
 python examples/render_layers.py OUT_DIR 1l2y.pdb     # offscreen PNG of each feature
-landau play examples/live_demo.py                     # a deck with live 3D steps
+llandau play examples/live_demo.py                     # a deck with live 3D steps
 ```
 
 ## Layout
@@ -190,4 +190,4 @@ landau play examples/live_demo.py                     # a deck with live 3D step
 - `src/`: the viewer: `camera` (z-up turntable), `scene` (structure and layers -> instances),
   `protein`, `surface`, `clash`, `theme`, `render` (sphere impostors, instanced lathe meshes,
   two-pass ghost, overlay), `window` (the explorer), `lib` (Python bindings)
-- `python/landau/`: the Python side of both
+- `python/llandau/`: the Python side of both

@@ -1,7 +1,7 @@
-"""landau: smooth scientific slides, drawn live (no videos are rendered), with
+"""llandau: smooth scientific slides, drawn live (no videos are rendered), with
 interactive 3D views of atomic trajectories (riemann's paths, splines, proteins).
 
-    from landau import *
+    from llandau import *
 
     class Results(Deck):
         def construct(self):
@@ -10,7 +10,7 @@ interactive 3D views of atomic trajectories (riemann's paths, splines, proteins)
 
     SLIDES = order(Results)
 
-    landau play slides.py
+    llandau play slides.py
 
 modules
     mobject    manim's model: Mobject, VMobject, VGroup, Group, ImageMobject, SVGMobject, colors, directions
@@ -24,12 +24,12 @@ modules
     theme      DARK / LIGHT, font, type scale (TITLE, BODY, SMALL, LABEL)
     text       text, bold, italic, eq, typst, title, bullets (Typst)
     layout     R (screen regions), place, below/above/left_of/right_of, align, stack, row, gaps XS..XL
-    media      image, svg, layered_svg (Inkscape layers, cached in .landau_cache/)
+    media      image, svg, layered_svg (Inkscape layers, cached in .llandau_cache/)
     deck       Deck (a slide: step, reveal, title, show_svg, live), order, typewrite
     live       live_scene, Deck.live: interactive 3D (Viewer) on chosen steps
-    cli        landau play | pdf | png
+    cli        llandau play | pdf | png
     viewer     Viewer: atomic trajectories in 3D (trails, tangents, protein styles, surfaces),
-               offscreen images and an explorer window (landau.explorer)
+               offscreen images and an explorer window (llandau.explorer)
     elements, colormaps, pdb
 """
 from .mobject import *

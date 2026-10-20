@@ -2,8 +2,8 @@
 import numpy as np
 
 from butane import butane
-from landau import Viewer
-from landau.explorer import explore
+from llandau import Viewer
+from llandau.explorer import explore
 
 positions, numbers = butane()
 viewer = Viewer().load(positions, numbers)

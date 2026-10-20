@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "llandau"
-version = "0.2.2"
+version = "0.3.0"
 description = "Smooth scientific slides drawn live, with interactive 3D views of atomic trajectories"
 requires-python = ">=3.10"
 license = "MIT"
@@ -12,14 +12,14 @@ readme = "README.md"
 dependencies = ["numpy"]
 
 [project.optional-dependencies]
-export = ["pillow"]  # landau pdf / png
+export = ["pillow"]  # llandau pdf / png
 plots = ["contourpy"]  # contour plots
 test = ["pytest", "pillow"]
 
 [project.scripts]
-landau = "landau.cli:main"
+llandau = "llandau.cli:main"
 
 [tool.maturin]
 python-source = "python"
-module-name = "landau._core"
+module-name = "llandau._core"
 features = ["pyo3/extension-module"]

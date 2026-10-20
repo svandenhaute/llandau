@@ -1,5 +1,5 @@
 __pycache__/
-.landau_cache/
+.llandau_cache/
 .venv/
 *.egg-info/
 *.so

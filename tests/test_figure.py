@@ -3,7 +3,7 @@ import re
 import numpy as np
 import pytest
 
-from landau import Deck, LIGHT, R, build, place, subplots
+from llandau import Deck, LIGHT, R, build, place, subplots
 
 
 def figure():

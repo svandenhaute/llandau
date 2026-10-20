@@ -1,11 +1,11 @@
 """Present a deck, or export it, using the SLIDES list from the scene file.
 Nothing is rendered ahead: the deck is drawn live, animations included.
 
-    landau play slides.py                  # present (F: full screen, arrows: steps)
-    landau play slides.py --only Masses QM # a few slides
-    landau play slides.py --start 12       # from step 12
-    landau pdf slides.py                   # one page per step: slides.pdf
-    landau png slides.py OUT_DIR           # one PNG per step
+    llandau play slides.py                  # present (F: full screen, arrows: steps)
+    llandau play slides.py --only Masses QM # a few slides
+    llandau play slides.py --start 12       # from step 12
+    llandau pdf slides.py                   # one page per step: slides.pdf
+    llandau png slides.py OUT_DIR           # one PNG per step
 """
 import argparse
 import ast
@@ -44,7 +44,7 @@ def stills(deck, size=(1920, 1080)):
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
-    parser = argparse.ArgumentParser(prog="landau", description=__doc__,
+    parser = argparse.ArgumentParser(prog="llandau", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", choices=["play", "pdf", "png"])
     parser.add_argument("file", type=Path)

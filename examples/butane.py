@@ -2,7 +2,7 @@
 import numpy as np
 from ase.build import molecule
 
-from landau import elements
+from llandau import elements
 
 
 def butane(num_frames=120):

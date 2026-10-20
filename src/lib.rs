@@ -1,4 +1,4 @@
-//! landau: smooth scientific slides drawn live (`slides`), and a viewer for atomic
+//! llandau: smooth scientific slides drawn live (`slides`), and a viewer for atomic
 //! trajectories that draws into decks, the explorer window, a native window handle or offscreen.
 
 pub mod camera;
@@ -172,7 +172,7 @@ impl Viewer {
 
 #[pymethods]
 impl Viewer {
-    /// Arguments are for subclasses' __init__ (e.g. landau.Viewer's theme).
+    /// Arguments are for subclasses' __init__ (e.g. llandau.Viewer's theme).
     #[new]
     #[pyo3(signature = (*_args, **_kwargs))]
     fn new(_args: &Bound<'_, pyo3::types::PyTuple>, _kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
@@ -298,7 +298,7 @@ impl Viewer {
         screenshot: Option<String>,
     ) -> PyResult<()> {
         let options = window::Options {
-            title: title.unwrap_or_else(|| "landau".into()),
+            title: title.unwrap_or_else(|| "llandau".into()),
             size,
             plots: plots.unwrap_or_default(),
             t: t.unwrap_or_default(),

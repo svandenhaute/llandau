@@ -7,7 +7,7 @@
             self.reveal(image("images/a.png", R.body.left))
             self.show_svg("images/b.svg", R.body.right)   # one slide step per layer
 
-    SLIDES = order(Title, Results, ...)   # numbers the slides; read by `landau play`
+    SLIDES = order(Title, Results, ...)   # numbers the slides; read by `llandau play`
 """
 from __future__ import annotations
 
@@ -76,7 +76,7 @@ class Deck(Scene):
         (default R.body), live and interactive in the player. Right after a reveal/step this only
         marks the upcoming step; otherwise it also ends the current one.
 
-        view     settings applied when the step starts (see landau.live): camera, frame, style,
+        view     settings applied when the step starts (see llandau.live): camera, frame, style,
                  sidechains, shading, fog, occlusion, coloring, scrub_discrete, show, hide
         still    also draw a still image of the view into the region (what exports show; the live
                  view covers it). Returned, e.g. to replace it later; None without.
@@ -102,7 +102,7 @@ class Deck(Scene):
 
     def show_svg(self, path, region: Region | None = None, layered: bool = True, anim=None,
                  run_time: float | None = None, pause: bool = True, accumulate: bool = True, **kwargs):
-        """Show an Inkscape SVG, one slide step per layer (see landau.media for the layer conventions).
+        """Show an Inkscape SVG, one slide step per layer (see llandau.media for the layer conventions).
 
         layered     False: show the whole drawing at once
         accumulate  False: each step replaces the previous one instead of adding to it

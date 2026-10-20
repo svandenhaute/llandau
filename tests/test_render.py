@@ -6,7 +6,7 @@ import os
 import numpy as np
 import pytest
 
-from landau import Viewer
+from llandau import Viewer
 
 # water, stretching one O-H bond over 5 frames
 START = np.array([[0.0, 0.0, 0.0], [0.96, 0.0, 0.0], [-0.24, 0.93, 0.0]])
@@ -87,7 +87,7 @@ def test_explorer_window(viewer, tmp_path):
 
     if sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         pytest.skip("no display")
-    from landau.explorer import explore
+    from llandau.explorer import explore
 
     path = tmp_path / "explorer.png"
     explore(viewer, plots={"x": np.arange(5.0)}, info="test",
@@ -103,7 +103,7 @@ def test_explorer_window(viewer, tmp_path):
 
 
 def test_slides_timeline():
-    from landau._core import Slides, parse_svg
+    from llandau._core import Slides, parse_svg
 
     svg = parse_svg(b'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">'
                     b'<rect x="2" y="2" width="6" height="6" fill="#000"/></svg>')

@@ -537,7 +537,7 @@ def _without(top: Mobject, part: Mobject) -> list[Mobject]:
 
 def build(scenes, background=None):
     """Run scene classes (or instances) one after another into one deck: a
-    Slides timeline (landau._core). Each scene is one slide."""
+    Slides timeline (llandau._core). Each scene is one slide."""
     builder = None
     t = 0.0
     for index, scene in enumerate(scenes):
