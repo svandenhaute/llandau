@@ -36,7 +36,7 @@ Wheels for macOS and Linux (Python >= 3.10) are on the GitHub releases (llandau,
 Landau: `landau` on PyPI is another project):
 
 ```
-pip install llandau --find-links https://github.com/svandenhaute/landau/releases/expanded_assets/v0.3.0
+pip install llandau --find-links https://github.com/svandenhaute/llandau/releases/expanded_assets/v0.3.0
 ```
 
 or build it (needs Rust): `pip install maturin && maturin develop --release`
