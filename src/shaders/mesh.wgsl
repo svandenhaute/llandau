@@ -44,5 +44,10 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
     let specular = pow(max(dot(normal, half_vector), 0.0), 40.0);
     // a darker rim where the surface turns away: it reads as an outline
     let rim = 1.0 - 0.5 * pow(1.0 - abs(dot(normal, to_eye)), 2.0);
-    return vec4((in.color.rgb * (0.38 + 0.62 * diffuse) + 0.12 * specular) * rim, in.color.a);
+    return vec4((linear(in.color.rgb) * (0.38 + 0.62 * diffuse) + 0.12 * specular) * rim, in.color.a);
+}
+
+// Colors come in as sRGB (as written in color tables); light and blend in linear.
+fn linear(c: vec3<f32>) -> vec3<f32> {
+    return select(pow((c + 0.055) / 1.055, vec3(2.4)), c / 12.92, c <= vec3(0.04045));
 }

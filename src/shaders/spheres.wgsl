@@ -76,7 +76,7 @@ fn fs(in: VertexOut) -> FragmentOut {
     let clip = g.proj * vec4(hit, 1.0);
 
     var out: FragmentOut;
-    out.color = vec4(shade(in.color.rgb, normal, -ray), coverage * in.color.a);
+    out.color = vec4(shade(linear(in.color.rgb), normal, -ray), coverage * in.color.a);
     out.depth = clip.z / clip.w;
     return out;
 }
@@ -86,4 +86,9 @@ fn shade(color: vec3<f32>, normal: vec3<f32>, to_eye: vec3<f32>) -> vec3<f32> {
     let half_vector = normalize(g.light.xyz + to_eye);
     let specular = pow(max(dot(normal, half_vector), 0.0), 40.0);
     return color * (0.38 + 0.62 * diffuse) + 0.12 * specular;
+}
+
+// Colors come in as sRGB (as written in color tables); light and blend in linear.
+fn linear(c: vec3<f32>) -> vec3<f32> {
+    return select(pow((c + 0.055) / 1.055, vec3(2.4)), c / 12.92, c <= vec3(0.04045));
 }

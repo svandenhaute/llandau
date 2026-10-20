@@ -64,7 +64,7 @@ fn vs(vertex: Vertex, instance: Instance) -> VertexOut {
 fn fs(in: VertexOut) -> @location(0) vec4<f32> {
     let color = select(in.color_start, in.color_end, in.along > 0.5);
     let normal = normalize(in.normal);
-    return vec4(shade(color.rgb, normal, normalize(-in.position)), color.a);
+    return vec4(shade(linear(color.rgb), normal, normalize(-in.position)), color.a);
 }
 
 fn shade(color: vec3<f32>, normal: vec3<f32>, to_eye: vec3<f32>) -> vec3<f32> {
@@ -72,4 +72,9 @@ fn shade(color: vec3<f32>, normal: vec3<f32>, to_eye: vec3<f32>) -> vec3<f32> {
     let half_vector = normalize(g.light.xyz + to_eye);
     let specular = pow(max(dot(normal, half_vector), 0.0), 40.0);
     return color * (0.38 + 0.62 * diffuse) + 0.12 * specular;
+}
+
+// Colors come in as sRGB (as written in color tables); light and blend in linear.
+fn linear(c: vec3<f32>) -> vec3<f32> {
+    return select(pow((c + 0.055) / 1.055, vec3(2.4)), c / 12.92, c <= vec3(0.04045));
 }

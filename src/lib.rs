@@ -8,6 +8,7 @@ pub mod render;
 pub mod scene;
 pub mod surface;
 pub mod theme;
+pub mod window;
 
 use std::ffi::c_void;
 use std::ptr::NonNull;
@@ -24,7 +25,7 @@ use render::{Gpu, Offscreen, Renderer};
 use scene::{Coloring, Ghost, Points, Scene, Sidechains, Structure, Style, SurfaceColors, VectorField};
 use theme::{Rgba, Theme};
 
-fn runtime_error(message: impl std::fmt::Display) -> PyErr {
+pub(crate) fn runtime_error(message: impl std::fmt::Display) -> PyErr {
     PyRuntimeError::new_err(message.to_string())
 }
 
@@ -248,7 +249,7 @@ impl Viewer {
         };
         let view = texture.texture.create_view(&Default::default());
         let size = (window.config.width, window.config.height);
-        self.renderer.draw(&self.gpu.device, &self.gpu.queue, &view, window.config.format, size, &self.camera);
+        self.renderer.draw(&self.gpu.device, &self.gpu.queue, &view, window.config.format, size, None, &self.camera);
         self.gpu.queue.present(texture);
         Ok(())
     }
@@ -260,6 +261,35 @@ impl Viewer {
             render::render_image(&self.gpu, &mut self.renderer, &mut self.offscreen, (width, height), &self.camera);
         let array = PyArray1::from_vec(py, pixels).reshape([height.max(1) as usize, width.max(1) as usize, 4])?;
         Ok(array.into_any())
+    }
+
+    /// Open the explorer window and return when it closes. plots: (name, xs,
+    /// values) on the scale of t, the parameter of each path frame; buttons:
+    /// (label, function of the camera dict returning text to copy); screenshot:
+    /// write one frame of the window to this PNG file and close.
+    #[pyo3(signature = (plots = None, t = None, info = None, buttons = None, title = None, size = (1300.0, 800.0), screenshot = None))]
+    #[allow(clippy::too_many_arguments)]
+    fn explore(
+        &mut self,
+        py: Python<'_>,
+        plots: Option<Vec<window::Curve>>,
+        t: Option<Vec<f64>>,
+        info: Option<String>,
+        buttons: Option<Vec<(String, Py<PyAny>)>>,
+        title: Option<String>,
+        size: (f64, f64),
+        screenshot: Option<String>,
+    ) -> PyResult<()> {
+        let options = window::Options {
+            title: title.unwrap_or_else(|| "riemann_viewer".into()),
+            size,
+            plots: plots.unwrap_or_default(),
+            t: t.unwrap_or_default(),
+            info,
+            buttons: buttons.unwrap_or_default(),
+            screenshot,
+        };
+        window::explore(self, py, options)
     }
 
     // --- structure ---------------------------------------------------------------
@@ -889,4 +919,134 @@ impl Viewer {
 fn _core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Viewer>()?;
     Ok(())
+}
+
+// --- the explorer window -------------------------------------------------------
+
+impl window::Explorable for Viewer {
+    fn gpu(&self) -> &Gpu {
+        &self.gpu
+    }
+
+    fn prepare(&mut self) {
+        self.upload();
+    }
+
+    fn draw_into(&mut self, view: &wgpu::TextureView, format: wgpu::TextureFormat, size: (u32, u32), viewport: [f32; 4]) {
+        self.renderer.draw(&self.gpu.device, &self.gpu.queue, view, format, size, Some(viewport), &self.camera);
+    }
+
+    fn controls(&mut self) -> &mut dyn window::Controls {
+        self
+    }
+}
+
+impl window::Controls for Viewer {
+    fn frame(&self) -> usize {
+        self.frame
+    }
+    fn set_frame(&mut self, frame: usize) {
+        Viewer::set_frame(self, frame)
+    }
+    fn num_frames(&self) -> usize {
+        Viewer::num_frames(self)
+    }
+    fn num_discrete_frames(&self) -> usize {
+        Viewer::num_discrete_frames(self)
+    }
+    fn scrub_discrete(&self) -> bool {
+        self.scene.scrub_discrete
+    }
+    fn set_scrub_discrete(&mut self, on: bool) {
+        let _ = Viewer::set_scrub_discrete(self, on);
+    }
+    fn theme(&self) -> &'static str {
+        Viewer::theme(self)
+    }
+    fn set_theme(&mut self, name: &str) {
+        let _ = Viewer::set_theme(self, name);
+    }
+    fn has_roles(&self) -> bool {
+        Viewer::has_roles(self)
+    }
+    fn style(&self) -> &'static str {
+        Viewer::style(self)
+    }
+    fn set_style(&mut self, style: &str) {
+        let _ = Viewer::set_style(self, style);
+    }
+    fn sidechains(&self) -> &'static str {
+        Viewer::sidechains(self)
+    }
+    fn set_sidechains(&mut self, sidechains: &str) {
+        let _ = Viewer::set_sidechains(self, sidechains);
+    }
+    fn coloring_names(&self) -> Vec<String> {
+        self.scene.colorings.keys().cloned().collect()
+    }
+    fn coloring(&self) -> Option<String> {
+        self.scene.coloring.clone()
+    }
+    fn set_coloring(&mut self, name: Option<String>) {
+        let _ = Viewer::set_coloring(self, name);
+    }
+    fn layers(&self) -> Vec<(String, bool)> {
+        let s = &self.scene;
+        let mut layers = vec![("atoms".into(), s.show_atoms), ("surface".into(), s.surface.visible)];
+        if self.num_path_frames() > 1 {
+            layers.push(("trails".into(), s.trails.visible));
+        }
+        if let Some(ghost) = &s.ghost {
+            layers.push(("ghost".into(), ghost.visible));
+        }
+        layers.push(("clashes".into(), s.show_clashes));
+        layers.extend(s.vectors.iter().map(|(name, field)| (name.clone(), field.visible)));
+        layers.extend(s.points.iter().map(|(name, points)| (name.clone(), points.visible)));
+        layers
+    }
+    fn set_visible(&mut self, layer: &str, visible: bool) {
+        let _ = Viewer::set_visible(self, layer, visible);
+    }
+    fn radius_scale(&self) -> f32 {
+        self.scene.radius_scale
+    }
+    fn set_radius_scale(&mut self, scale: f32) {
+        self.scene.radius_scale = scale;
+        self.changed();
+    }
+    fn surface_opacity(&self) -> f32 {
+        self.scene.surface.opacity
+    }
+    fn set_surface_opacity(&mut self, opacity: f32) {
+        self.scene.surface.opacity = opacity;
+        self.changed();
+    }
+    fn surface_colors_by_atom(&self) -> bool {
+        self.scene.surface.colors == SurfaceColors::Atoms
+    }
+    fn set_surface_colors_by_atom(&mut self, by_atom: bool) {
+        self.scene.surface.colors = if by_atom { SurfaceColors::Atoms } else { SurfaceColors::Uniform };
+        self.changed();
+    }
+    fn vector_scales(&self) -> Vec<(String, f32)> {
+        self.scene.vectors.iter().map(|(name, field)| (name.clone(), field.scale)).collect()
+    }
+    fn set_vector_scale(&mut self, name: &str, scale: f32) {
+        let _ = Viewer::set_vector_scale(self, name, scale);
+    }
+    fn orbit(&mut self, dx: f32, dy: f32) {
+        self.camera.orbit(dx, dy);
+    }
+    fn pan(&mut self, dx: f32, dy: f32, height: f32) {
+        self.camera.pan(dx, dy, height);
+    }
+    fn zoom(&mut self, factor: f32) {
+        self.camera.zoom(factor);
+    }
+    fn reset_camera(&mut self) {
+        self.camera = self.home;
+    }
+    fn camera_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        Viewer::camera(self, py)
+    }
 }

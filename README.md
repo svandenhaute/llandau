@@ -7,8 +7,8 @@ an explorer window, or render offscreen to numpy.
 Install a wheel from the GitHub releases (macOS and Linux, Python >= 3.10):
 
 ```
-pip install "riemann_viewer[qt] @ https://github.com/svandenhaute/riemann_viewer/releases/download/v0.2.0/riemann_viewer-0.2.0-cp310-abi3-manylinux_2_28_x86_64.whl"
-pip install "riemann_viewer[qt] @ https://github.com/svandenhaute/riemann_viewer/releases/download/v0.2.0/riemann_viewer-0.2.0-cp310-abi3-macosx_11_0_arm64.whl"
+pip install "riemann_viewer @ https://github.com/svandenhaute/riemann_viewer/releases/download/v0.3.0/riemann_viewer-0.3.0-cp310-abi3-manylinux_2_28_x86_64.whl"
+pip install "riemann_viewer @ https://github.com/svandenhaute/riemann_viewer/releases/download/v0.3.0/riemann_viewer-0.3.0-cp310-abi3-macosx_11_0_arm64.whl"
 ```
 
 or build it (needs Rust):
@@ -46,6 +46,12 @@ Roles (as riemann's `atom_role`): 0 hydrogen, 1 side chain heavy atom, 2 backbon
 The protein style draws a smooth tube through the CAs and the side chains, no hydrogens;
 trails follow the CAs only. Themes ("light", "dark") set the background and every
 non-element color; element colors come from `riemann_viewer.elements`.
+
+`riemann_viewer.explorer.explore(viewer, plots=..., t=...)` opens a native window
+(winit + egui, no Qt) with the 3D view, a panel of controls and plots; it works on
+macOS, X11 and Wayland. Keys: space plays, `,` `.` step frames, `D` toggles the
+discrete states, `0` resets the camera, Escape closes. Qt is only needed for
+`riemann_viewer.qt.ViewerWidget` (embedding, e.g. the present / manim-slides overlay).
 
 On Linux (X11 or Wayland) the Qt widget renders offscreen and paints the image
 (`RIEMANN_VIEWER_QT=raster`, the default there); on macOS it draws into its own native

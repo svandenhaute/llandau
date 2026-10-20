@@ -86,3 +86,24 @@ def test_qt_raster_widget(viewer):
     pixels = np.frombuffer(image.constBits(), np.uint8, image.sizeInBytes()).reshape(image.height(), -1, 4)
     assert drawn(pixels) > 0.01
     widget.close()
+
+
+def test_explorer_window(viewer, tmp_path):
+    """The native explorer opens, draws one frame (3D view and panel) and closes."""
+    import sys
+
+    if sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        pytest.skip("no display")
+    from riemann_viewer.explorer import explore
+
+    path = tmp_path / "explorer.png"
+    explore(viewer, plots={"x": np.arange(5.0)}, info="test",
+            buttons={"target": lambda camera: str(camera["target"])}, screenshot=str(path))
+    from PIL import Image
+
+    image = np.asarray(Image.open(path).convert("RGB"))
+    assert image.shape[0] > 100 and image.shape[1] > 300
+    panel, view = image[:, -50:], image[:, : image.shape[1] // 2]
+    assert drawn(view) > 0.001  # the molecule
+    assert (panel != 255).any()  # the panel
+    explore(viewer, screenshot=str(path))  # a second window in the same process

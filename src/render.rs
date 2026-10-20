@@ -229,7 +229,9 @@ impl Renderer {
         self.upload_slot(device, queue, Slot::Trails, trails);
     }
 
-    /// Draw the uploaded instances into `target`, of `size` pixels.
+    /// Draw the uploaded instances into `target`, of `size` pixels; within
+    /// `viewport` (x, y, width, height in pixels) if given, else all of it.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
         device: &wgpu::Device,
@@ -237,6 +239,7 @@ impl Renderer {
         target: &wgpu::TextureView,
         format: wgpu::TextureFormat,
         size: (u32, u32),
+        viewport: Option<[f32; 4]>,
         camera: &Camera,
     ) {
         if !matches!(&self.targets, Some(t) if t.format == format && t.size == size) {
@@ -266,12 +269,13 @@ impl Renderer {
         }
         let targets = self.targets.as_ref().unwrap();
 
-        let aspect = size.0 as f32 / size.1.max(1) as f32;
+        let viewport = viewport.unwrap_or([0.0, 0.0, size.0 as f32, size.1 as f32]);
+        let aspect = viewport[2] / viewport[3].max(1.0);
         let light = Vec3::new(-0.35, 0.45, 1.0).normalize();
         let globals = Globals {
             view: camera.view().to_cols_array_2d(),
             proj: camera.projection(aspect).to_cols_array_2d(),
-            viewport: [size.0 as f32, size.1 as f32, 0.0, 0.0],
+            viewport: [viewport[2], viewport[3], 0.0, 0.0],
             light: light.extend(0.0).to_array(),
         };
         queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
@@ -300,6 +304,8 @@ impl Renderer {
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &self.bind_group, &[]);
+            let [x, y, width, height] = viewport;
+            pass.set_viewport(x, y, width.max(1.0), height.max(1.0), 0.0, 1.0);
             for &(slot, shader, mesh, variant) in &passes {
                 let Some(Instances { buffer: Some(buffer), count: count @ 1.. }) = self.slots.get(&slot) else {
                     continue;
@@ -482,6 +488,7 @@ fn cone_mesh(sides: u32) -> Vec<[f32; 6]> {
 /// An offscreen target and its readback buffer, kept while the size stays the same.
 pub struct Offscreen {
     size: (u32, u32),
+    format: wgpu::TextureFormat,
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     buffer: wgpu::Buffer,
@@ -491,14 +498,15 @@ pub struct Offscreen {
 impl Offscreen {
     const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
-    fn new(device: &wgpu::Device, size: (u32, u32)) -> Self {
+    pub fn with_format(device: &wgpu::Device, size: (u32, u32), format: wgpu::TextureFormat) -> Self {
+        let size = (size.0.max(1), size.1.max(1));
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("offscreen"),
             size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: Self::FORMAT,
+            format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
@@ -510,7 +518,42 @@ impl Offscreen {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        Self { size, texture, view, buffer, padded_row }
+        Self { size, format, texture, view, buffer, padded_row }
+    }
+
+    pub fn view(&self) -> &wgpu::TextureView {
+        &self.view
+    }
+
+    /// Copy the texture back: 4 bytes per pixel, rows top to bottom, in the texture's format.
+    pub fn read(&self, gpu: &Gpu) -> Vec<u8> {
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            self.texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &self.buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(self.padded_row),
+                    rows_per_image: Some(self.size.1),
+                },
+            },
+            wgpu::Extent3d { width: self.size.0, height: self.size.1, depth_or_array_layers: 1 },
+        );
+        gpu.queue.submit([encoder.finish()]);
+        let slice = self.buffer.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("GPU readback failed");
+        let row = (4 * self.size.0) as usize;
+        let mut pixels = Vec::with_capacity(row * self.size.1 as usize);
+        {
+            let mapped = slice.get_mapped_range().expect("GPU readback failed");
+            for line in mapped.chunks(self.padded_row as usize) {
+                pixels.extend_from_slice(&line[..row]);
+            }
+        }
+        self.buffer.unmap();
+        pixels
     }
 }
 
@@ -524,37 +567,10 @@ pub fn render_image(
     camera: &Camera,
 ) -> Vec<u8> {
     let size = (size.0.max(1), size.1.max(1));
-    if !matches!(cache, Some(o) if o.size == size) {
-        *cache = Some(Offscreen::new(&gpu.device, size));
+    if !matches!(cache, Some(o) if o.size == size && o.format == Offscreen::FORMAT) {
+        *cache = Some(Offscreen::with_format(&gpu.device, size, Offscreen::FORMAT));
     }
     let target = cache.as_ref().unwrap();
-    renderer.draw(&gpu.device, &gpu.queue, &target.view, Offscreen::FORMAT, size, camera);
-
-    let mut encoder = gpu.device.create_command_encoder(&Default::default());
-    encoder.copy_texture_to_buffer(
-        target.texture.as_image_copy(),
-        wgpu::TexelCopyBufferInfo {
-            buffer: &target.buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(target.padded_row),
-                rows_per_image: Some(size.1),
-            },
-        },
-        wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
-    );
-    gpu.queue.submit([encoder.finish()]);
-    let slice = target.buffer.slice(..);
-    slice.map_async(wgpu::MapMode::Read, |_| {});
-    gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("GPU readback failed");
-    let row = (4 * size.0) as usize;
-    let mut pixels = Vec::with_capacity(row * size.1 as usize);
-    {
-        let mapped = slice.get_mapped_range().expect("GPU readback failed");
-        for line in mapped.chunks(target.padded_row as usize) {
-            pixels.extend_from_slice(&line[..row]);
-        }
-    }
-    target.buffer.unmap();
-    pixels
+    renderer.draw(&gpu.device, &gpu.queue, &target.view, Offscreen::FORMAT, size, None, camera);
+    target.read(gpu)
 }
