@@ -5,8 +5,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-import riemann_viewer
-from riemann_viewer import Viewer, pdb
+import landau
+from landau import Viewer, pdb
 
 out = Path(sys.argv[1])
 pdb_path = sys.argv[2]
@@ -20,7 +20,7 @@ tangents = np.gradient(positions, axis=0)
 tangents /= np.linalg.norm(tangents.reshape(frames, -1), axis=1)[:, None, None]
 tangents *= np.sqrt(atoms)
 t = np.linspace(0, 1, frames)
-viewer.set_trails(segment_ids=riemann_viewer.segment_ids(t, np.linspace(0, 1, 7)))
+viewer.set_trails(segment_ids=landau.segment_ids(t, np.linspace(0, 1, 7)))
 viewer.frame = 10
 
 

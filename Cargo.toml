@@ -1,12 +1,12 @@
 [package]
-name = "riemann_viewer"
-version = "0.4.0"
+name = "landau"
+version = "0.1.0"
 edition = "2024"
-description = "Small wgpu viewer for atomic trajectories, embeddable in Qt (manim-slides) windows"
+description = "Smooth scientific slides drawn live, with interactive 3D views of atomic trajectories"
 license = "MIT"
 
 [lib]
-name = "riemann_viewer"
+name = "landau"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]

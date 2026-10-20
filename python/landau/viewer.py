@@ -1,4 +1,5 @@
-"""Small wgpu viewer for atomic trajectories, embeddable in Qt (manim-slides) windows."""
+"""The 3D viewer for atomic trajectories: paths, spline trails, tangents, ghosts, protein
+styles and surfaces; drawn offscreen, in the explorer window, or live in a deck."""
 import numpy as np
 
 from . import colormaps, elements

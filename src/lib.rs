@@ -1,5 +1,5 @@
-//! riemann_viewer: a small viewer for atomic trajectories that draws into a native
-//! window handle (e.g. a Qt widget over the manim-slides player) or offscreen.
+//! landau: smooth scientific slides drawn live (`slides`), and a viewer for atomic
+//! trajectories that draws into decks, the explorer window, a native window handle or offscreen.
 
 pub mod camera;
 pub mod clash;
@@ -171,7 +171,7 @@ impl Viewer {
 
 #[pymethods]
 impl Viewer {
-    /// Arguments are for subclasses' __init__ (e.g. riemann_viewer.Viewer's theme).
+    /// Arguments are for subclasses' __init__ (e.g. landau.Viewer's theme).
     #[new]
     #[pyo3(signature = (*_args, **_kwargs))]
     fn new(_args: &Bound<'_, pyo3::types::PyTuple>, _kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
@@ -297,7 +297,7 @@ impl Viewer {
         screenshot: Option<String>,
     ) -> PyResult<()> {
         let options = window::Options {
-            title: title.unwrap_or_else(|| "riemann_viewer".into()),
+            title: title.unwrap_or_else(|| "landau".into()),
             size,
             plots: plots.unwrap_or_default(),
             t: t.unwrap_or_default(),

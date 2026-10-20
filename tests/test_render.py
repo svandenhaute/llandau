@@ -6,7 +6,7 @@ import os
 import numpy as np
 import pytest
 
-from riemann_viewer import Viewer
+from landau import Viewer
 
 # water, stretching one O-H bond over 5 frames
 START = np.array([[0.0, 0.0, 0.0], [0.96, 0.0, 0.0], [-0.24, 0.93, 0.0]])
@@ -81,31 +81,13 @@ def test_dark_theme(viewer):
     assert drawn(image, background=0) > 0.01
 
 
-def test_qt_raster_widget(viewer):
-    pytest.importorskip("qtpy")
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    from qtpy.QtWidgets import QApplication
-
-    from riemann_viewer.qt import ViewerWidget
-
-    app = QApplication.instance() or QApplication([])
-    widget = ViewerWidget(viewer=viewer, mode="raster")
-    widget.resize(200, 150)
-    widget.show()
-    app.processEvents()
-    image = widget.grab().toImage()
-    pixels = np.frombuffer(image.constBits(), np.uint8, image.sizeInBytes()).reshape(image.height(), -1, 4)
-    assert drawn(pixels) > 0.01
-    widget.close()
-
-
 def test_explorer_window(viewer, tmp_path):
     """The native explorer opens, draws one frame (3D view and panel) and closes."""
     import sys
 
     if sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         pytest.skip("no display")
-    from riemann_viewer.explorer import explore
+    from landau.explorer import explore
 
     path = tmp_path / "explorer.png"
     explore(viewer, plots={"x": np.arange(5.0)}, info="test",
@@ -121,7 +103,7 @@ def test_explorer_window(viewer, tmp_path):
 
 
 def test_slides_timeline():
-    from riemann_viewer._core import Slides, parse_svg
+    from landau._core import Slides, parse_svg
 
     svg = parse_svg(b'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">'
                     b'<rect x="2" y="2" width="6" height="6" fill="#000"/></svg>')

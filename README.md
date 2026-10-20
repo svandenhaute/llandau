@@ -1,29 +1,118 @@
-# riemann_viewer
+# landau
 
-A small wgpu viewer for atomic trajectories. It draws straight into a native
-window handle, so it can float over a slide in the manim-slides player, sit in
-an explorer window, or render offscreen to numpy.
-
-Install a wheel from the GitHub releases (macOS and Linux, Python >= 3.10):
-
-```
-pip install "riemann_viewer @ https://github.com/svandenhaute/riemann_viewer/releases/download/v0.4.0/riemann_viewer-0.4.0-cp310-abi3-manylinux_2_28_x86_64.whl"
-pip install "riemann_viewer @ https://github.com/svandenhaute/riemann_viewer/releases/download/v0.4.0/riemann_viewer-0.4.0-cp310-abi3-macosx_11_0_arm64.whl"
-```
-
-or build it (needs Rust):
-
-```
-pip install maturin && maturin develop --release     # MACOSX_DEPLOYMENT_TARGET=15.0 on macOS
-python examples/explore_butane.py                     # explorer window
-python examples/explore_trpcage.py 1l2y.pdb           # protein: NMR models as frames
-python examples/slides_player.py ~/sandbox/polyscope-slides/slides/Dummy.json
-python examples/render_layers.py OUT_DIR 1l2y.pdb     # offscreen PNG of each feature
-```
+Smooth scientific slides, drawn live. Decks are written like manim scenes (with manim-slides'
+steps), but nothing is rendered ahead: every animation is drawn as it plays (wgpu), so there are
+no videos, no render step and no Qt. Built for presenting [riemann](https://github.com/rotskoff-group/riemann):
+interactive 3D views of atomic trajectories, splines, tangents and proteins sit inside the
+slides, and plots come straight from numpy arrays.
 
 ```python
-from riemann_viewer import Viewer, segment_ids
-from riemann_viewer.explorer import explore
+from landau import *
+
+class Results(Deck):
+    theme = LIGHT
+    def construct(self):
+        self.title("train 'likelihood' functions!")
+        reaction = self.reveal(image("figures/reaction.png", R.body.left))
+        self.reveal(below(text("cost $tilde N^3$"), reaction), anim=Write)
+        self.show_svg("figures/logits.svg", R.body.right)   # one slide step per Inkscape layer
+
+SLIDES = order(Results)
+```
+
+```
+landau play slides.py              # present: arrows step, F full screen, the wheel scrubs
+landau play slides.py --only Results --start 3
+landau pdf slides.py               # one page per step
+landau png slides.py OUT_DIR
+```
+
+## Install
+
+Wheels for macOS and Linux (Python >= 3.10) are on the GitHub releases:
+
+```
+pip install landau --find-links https://github.com/svandenhaute/landau/releases/expanded_assets/v0.1.0
+```
+
+or build it (needs Rust): `pip install maturin && maturin develop --release`
+(`MACOSX_DEPLOYMENT_TARGET=15.0` on macOS).
+
+External tools:
+- **typst** CLI: all text and math
+- **rsvg-convert** (librsvg) or **Inkscape**: rasterizing layered SVGs (or `pip install cairosvg`)
+- fonts: Linux Biolinum O (text), Libertinus Math (math; falls back to New Computer Modern Math)
+- optional: pillow (`landau pdf | png`), matplotlib (its colormaps), contourpy (contour plots)
+
+## Slides
+
+| module | contents |
+|---|---|
+| `mobject` | manim's model: `Mobject VMobject VGroup Group ImageMobject SVGMobject`, colors, directions |
+| `shapes` | `Line Arrow Circle Dot Rectangle Polygon RoundedRectangle SurroundingRectangle ...` |
+| `animation` | `FadeIn Write Create Transform ReplacementTransform .animate LaggedStart ...`, rate functions |
+| `scene` | `Scene` (`add play wait next_slide`), updaters, `ValueTracker`, `always_redraw`, `build` |
+| `axes` | manim's `NumberLine Axes NumberPlane ParametricFunction FunctionGraph` |
+| `plot` | `Plot`: matplotlib-style plots of numpy data, revealed in steps |
+| `theme` | `DARK`/`LIGHT`, `FONT`, type scale `TITLE BODY SMALL LABEL` |
+| `text` | `text bold italic eq typst title bullets` (Typst) |
+| `layout` | `R` regions (`R.body.left.top`, `hsplit`, `grid`, `right_of(mob)`...), `place`, `below above left_of right_of align stack row`, gaps `XS S M L XL` |
+| `media` | `image svg layered_svg`; layered SVGs are split when building, cached in `.landau_cache/` |
+| `deck` | `Deck` (`step reveal title show_svg live`), `order`, `typewrite` |
+| `live` | `live_scene`, `Deck.live`: interactive 3D on chosen steps |
+
+Animations follow manim's definitions (timing, lag, rate functions); those without a native
+clip (rotations, `path_arc`, updaters, custom `interpolate_mobject`) are stepped at 60 fps when
+the deck is built. A deck is one timeline of clips; the player evaluates it at any time, so
+playing, stepping back and scrubbing (the wheel) are the same thing.
+
+### Plots
+
+```python
+ax = Plot(R.body.right, xlabel="time $t$ (ps)", ylabel="energy (eV)")
+md = ax.plot(t, e, label="MD")                       # nothing shown yet
+with ax.group() as samples:                          # several commands, one step
+    ax.scatter(ts, es, c=w, cmap="viridis", s=30, label="samples")
+    ax.fill_between(t, lo, hi, alpha=0.2)
+legend = ax.legend()
+
+self.reveal(ax)                                      # frame, ticks and labels first
+self.reveal(md, anim=Create)                         # the line draws itself
+self.reveal(samples, legend, anim=FadeIn)
+```
+
+`plot scatter fill_between axhline axvline bar hist errorbar imshow contour contourf text
+legend colorbar`, with matplotlib's arguments; sizes in points (times `scale=2`). `ax.c2p(x, y)`
+places other mobjects at data coordinates.
+
+### Live 3D steps
+
+```python
+@live_scene("butane")
+def butane(viewer):                          # a landau.Viewer, in the deck's theme
+    viewer.load(positions, numbers)          # (frames, atoms, 3), (atoms,)
+
+class Results(Deck):
+    def construct(self):
+        self.live("butane", R.body.right)    # the next step shows it over R.body.right
+        self.reveal(place(text("3D here"), R.body.left))
+        self.live("butane", R.body.right, camera={"azimuth": 30}, frame=60)  # moves there
+        self.reveal(...)
+```
+
+Over a live view: drag rotates, right drag pans, the wheel scrubs frames, pinch zooms; `,` `.`
+step frames, `P` plays, `D` toggles the discrete states, `0` resets the camera. Exports show a
+still image of each live view. See `landau.live` for the view settings.
+
+Layer conventions for `show_svg`: steps are ordered by the first number in each Inkscape layer
+label (layers sharing a number appear together), saved visibility is ignored, and layers whose
+label starts with `_` are skipped.
+
+## The viewer
+
+```python
+from landau import Viewer, segment_ids
+from landau.explorer import explore
 
 viewer = Viewer(theme="light").load(positions, numbers, roles=roles)   # (frames, atoms, 3), (atoms,)
 viewer.style = "protein"                      # or "atoms" (ball and stick)
@@ -46,27 +135,27 @@ explore(viewer, plots={"action": action}, t=t)
 Roles (as riemann's `atom_role`): 0 hydrogen, 1 side chain heavy atom, 2 backbone N C O, 3 CA.
 The protein style draws a smooth tube through the CAs and the side chains, no hydrogens;
 trails follow the CAs only. Themes ("light", "dark") set the background and every
-non-element color; element colors come from `riemann_viewer.elements`.
+non-element color; element colors come from `landau.elements`.
 
-`riemann_viewer.explorer.explore(viewer, plots=..., t=...)` opens a native window
-(winit + egui, no Qt) with the 3D view, a panel of controls and plots; it works on
-macOS, X11 and Wayland. Keys: space plays, `,` `.` step frames, `D` toggles the
-discrete states, `0` resets the camera, Escape closes. Qt is only needed for
-`riemann_viewer.qt.ViewerWidget` (embedding, e.g. the present / manim-slides overlay).
+`explore(viewer, plots=..., t=...)` opens a native window (winit + egui) with the 3D view, a
+panel of controls and plots; it works on macOS, X11 and Wayland. Keys: space plays, `,` `.`
+step frames, `D` toggles the discrete states, `0` resets the camera, Escape closes. Without a
+GPU, a software Vulkan driver (Mesa's lavapipe) works; `WGPU_BACKEND=vulkan|gl|metal` picks the
+backend, `Viewer().adapter` tells which GPU is in use.
 
-On Linux (X11 or Wayland) the Qt widget renders offscreen and paints the image
-(`RIEMANN_VIEWER_QT=raster`, the default there); on macOS it draws into its own native
-window (`native`), which the overlay over the manim-slides player needs. Without a
-GPU, a software Vulkan driver (Mesa's lavapipe) works; `WGPU_BACKEND=vulkan|gl|metal`
-picks the backend, `Viewer().adapter` tells which GPU is in use.
+```
+python examples/explore_butane.py                     # explorer window
+python examples/explore_trpcage.py 1l2y.pdb           # protein: NMR models as frames
+python examples/render_layers.py OUT_DIR 1l2y.pdb     # offscreen PNG of each feature
+landau play examples/live_demo.py                     # a deck with live 3D steps
+```
 
-`riemann_viewer.qt.ViewerWidget`: left drag rotates, right drag (or shift + drag) pans,
-wheel scrubs frames, ctrl + wheel or pinch zooms, double click resets the camera.
-Keys stay with the parent window. Over the manim-slides player it has to be an
-overlay (`ViewerWidget(player, overlay=True)`): as a native child, the video stops showing.
+## Layout
 
-Layout: `src/camera.rs` (z-up turntable), `src/scene.rs` (structure and layers -> instances),
-`src/protein.rs` (chains, backbone spline), `src/clash.rs`, `src/theme.rs`,
-`src/render.rs` (wgpu: sphere impostors, instanced lathe meshes, two-pass ghost, overlay),
-`src/lib.rs` (Python bindings); `python/riemann_viewer/` (elements, colormaps, PDB reading,
-the Qt widget and the explorer).
+- `src/slides/`: decks: `timeline` (clips, marks, manim's animation logic), `paint` (lyon
+  tessellation, supersampled wgpu drawing), `svg` (usvg), `player` (the window), `live` (3D
+  views in decks)
+- `src/`: the viewer: `camera` (z-up turntable), `scene` (structure and layers -> instances),
+  `protein`, `surface`, `clash`, `theme`, `render` (sphere impostors, instanced lathe meshes,
+  two-pass ghost, overlay), `window` (the explorer), `lib` (Python bindings)
+- `python/landau/`: the Python side of both

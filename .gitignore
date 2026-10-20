@@ -1,5 +1,6 @@
-target/
 __pycache__/
-*.so
-*.png
+.landau_cache/
 .venv/
+*.egg-info/
+*.so
+target/

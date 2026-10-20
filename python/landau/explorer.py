@@ -1,7 +1,7 @@
 """The explorer: a native window with the viewer and a panel of controls and plots.
 
-    from riemann_viewer import Viewer
-    from riemann_viewer.explorer import explore
+    from landau import Viewer
+    from landau.explorer import explore
 
     viewer = Viewer().load(positions, numbers, roles=roles)
     viewer.add_vectors("tangent", tangents)
@@ -12,7 +12,7 @@ Mouse: drag rotates, right drag (or shift + drag) pans, the wheel scrubs frames
 ctrl + wheel or a pinch zooms, a double click resets the camera. Keys: space plays,
 , and . step frames (shift: 5% of them), Home and End go to the first and last
 frame, D toggles the discrete states, 0 resets the camera, Escape closes. No Qt
-needed: the window is part of riemann_viewer (winit + egui).
+needed: the window is part of landau (winit + egui).
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def _curve(name, values, t):
 
 
 def explore(viewer, plots: dict | None = None, t=None, info: str | None = None,
-            buttons: dict | None = None, title: str = "riemann_viewer", screenshot: str | None = None):
+            buttons: dict | None = None, title: str = "landau", screenshot: str | None = None):
     """Show the viewer in a window until it closes.
 
     plots       name -> values per frame, or name -> (xs, values) on the scale of `t`

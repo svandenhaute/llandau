@@ -1,4 +1,4 @@
-//! Live 3D views in a deck: riemann_viewer viewers drawn into their regions of
+//! Live 3D views in a deck: landau viewers drawn into their regions of
 //! the slide every frame, on the same GPU, and controlled with the mouse and
 //! keys while their step is shown.
 //!

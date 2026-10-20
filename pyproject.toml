@@ -3,19 +3,23 @@ requires = ["maturin>=1.7,<2"]
 build-backend = "maturin"
 
 [project]
-name = "riemann_viewer"
-version = "0.4.0"
-description = "Small wgpu viewer for atomic trajectories, embeddable in Qt (manim-slides) windows"
+name = "landau"
+version = "0.1.0"
+description = "Smooth scientific slides drawn live, with interactive 3D views of atomic trajectories"
 requires-python = ">=3.10"
 license = "MIT"
 readme = "README.md"
 dependencies = ["numpy"]
 
 [project.optional-dependencies]
-qt = ["qtpy", "PySide6"]
-test = ["pytest", "qtpy", "PySide6"]
+export = ["pillow"]  # landau pdf / png
+plots = ["contourpy"]  # contour plots
+test = ["pytest", "pillow"]
+
+[project.scripts]
+landau = "landau.cli:main"
 
 [tool.maturin]
 python-source = "python"
-module-name = "riemann_viewer._core"
+module-name = "landau._core"
 features = ["pyo3/extension-module"]

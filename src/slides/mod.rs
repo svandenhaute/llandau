@@ -1,6 +1,6 @@
 //! Slides without videos: a deck is a timeline of shapes and images that is
 //! drawn live, at any moment, in a window or offscreen (see `timeline`).
-//! Python builds the timeline (present); this draws and presents it.
+//! Python builds the timeline (landau.scene); this draws and presents it.
 
 pub mod live;
 pub mod paint;
@@ -20,7 +20,7 @@ use paint::{Image, Painter};
 use timeline::{Clip, Kind, LiveSpan, Mark, Placement, Rate, Shape, Style, Timeline};
 
 /// A deck's timeline, drawn with its own GPU device.
-#[pyclass(unsendable, module = "riemann_viewer._core")]
+#[pyclass(unsendable, module = "landau._core")]
 pub struct Slides {
     timeline: Timeline,
     images: Vec<Image>,
