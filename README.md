@@ -43,16 +43,16 @@ External tools:
 | `layout` | `R` regions (`R.body.left.top`, `hsplit`, `grid`, `right_of(mob)`...), `place`, `below above left_of right_of align stack row`, gaps `XS S M L XL` |
 | `media` | `image svg layered_svg`; layered SVGs are split at render time, cached in `.present_cache/` |
 | `deck` | `Deck` (`step reveal title show_svg live`), `order`, `typewrite` |
-| `live` | `live_scene`, `present live`: interactive 3D (molview) on selected steps |
+| `live` | `live_scene`, `present live`: interactive 3D (riemann_viewer) on selected steps |
 
 ## Live 3D steps
 
-With `pip install -e ".[live]"` and [molview](../molview), chosen steps show an interactive
+With `pip install -e ".[live]"` and [riemann_viewer](https://github.com/svandenhaute/riemann_viewer), chosen steps show an interactive
 3D view over a region of the slide, in manim-slides' Qt player:
 
 ```python
 @live_scene("butane")
-def butane(viewer):                          # a molview.Viewer, in the deck's theme
+def butane(viewer):                          # a riemann_viewer.Viewer, in the deck's theme
     viewer.load(positions, numbers)          # (frames, atoms, 3), (atoms,)
 
 class Results(Deck):

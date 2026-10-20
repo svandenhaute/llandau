@@ -15,7 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 cairosvg = ["cairosvg"]  # fallback SVG rasterizer when neither rsvg-convert nor inkscape is installed
-live = ["molview", "qtpy"]  # `present live`: interactive 3D steps (molview: pip install -e path/to/molview)
+live = ["riemann_viewer", "qtpy"]  # `present live`: interactive 3D steps (riemann_viewer: wheels on its GitHub releases)
 
 [project.scripts]
 present = "present.render:main"

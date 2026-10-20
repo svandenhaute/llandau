@@ -1,7 +1,7 @@
-"""Live, interactive 3D (molview) over chosen slide steps, in manim-slides' player.
+"""Live, interactive 3D (riemann_viewer) over chosen slide steps, in manim-slides' player.
 
     @live_scene("butane")
-    def butane(viewer):                     # a molview.Viewer, in the deck's theme
+    def butane(viewer):                     # a riemann_viewer.Viewer, in the deck's theme
         viewer.load(positions, numbers)     # (frames, atoms, 3), (atoms,)
         viewer.add_vectors("tangent", tangents, visible=False)
 
@@ -25,7 +25,7 @@ P plays the trajectory, D toggles scrubbing the discrete states, 0 resets the
 camera; the arrows still change slides. Rendered (video, HTML, PDF), a live step
 shows a still image of its view instead.
 
-Needs molview: pip install "present[live]" (and molview itself).
+Needs riemann_viewer (github.com/svandenhaute/riemann_viewer): pip install "present[live]".
 """
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ DEFAULT_REGION = (0.05, 0.15, 0.9, 0.8)  # left, top, width, height as fractions
 
 
 def live_scene(name: str):
-    """Register a function that builds a scene into the molview.Viewer it is given."""
+    """Register a function that builds a scene into the riemann_viewer.Viewer it is given."""
     def register(build):
         SCENES[name] = build
         return build
@@ -95,9 +95,9 @@ def apply_view(viewer, view: dict, camera: bool = True):
 
 def still(scene: str, theme: str, view: dict, size: tuple[int, int]):
     """RGBA image (height, width, 4) of a scene's view, for the rendered slides."""
-    import molview
+    import riemann_viewer
 
-    viewer = molview.Viewer(theme=theme)
+    viewer = riemann_viewer.Viewer(theme=theme)
     build(viewer, scene)
     apply_view(viewer, view)
     return viewer.render_image(*size)
@@ -120,11 +120,11 @@ def blend_camera(start: dict, end: dict, t: float) -> dict:
 
 
 def run(names: list[str], folder: Path = Path("slides"), full_screen: bool = True) -> int:
-    import molview
+    import riemann_viewer
     from manim_slides.config import Config, PresentationConfig
     from manim_slides.present.player import Player
     from manim_slides.qt_utils import qapp
-    from molview.qt import ViewerWidget
+    from riemann_viewer.qt import ViewerWidget
     from qtpy.QtCore import QElapsedTimer, QPoint, QRect, Qt, QTimer
 
     app = qapp()
@@ -134,7 +134,7 @@ def run(names: list[str], folder: Path = Path("slides"), full_screen: bool = Tru
             self.live = None  # Player.__init__ already changes slides
             super().__init__(*args, **kwargs)
             # an overlay window: as a child widget, the slide video no longer shows on macOS
-            self.live = ViewerWidget(self, viewer=molview.Viewer(), overlay=True)
+            self.live = ViewerWidget(self, viewer=riemann_viewer.Viewer(), overlay=True)
             self.spec = None
             self.playing = QTimer(self, interval=33)
             self.playing.timeout.connect(lambda: self.step_frame(1, wrap=True))
