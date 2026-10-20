@@ -1,0 +1,18 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "molview"
+version = "0.1.0"
+description = "Small wgpu viewer for atomic trajectories, embeddable in Qt (manim-slides) windows"
+requires-python = ">=3.10"
+dependencies = ["numpy"]
+
+[project.optional-dependencies]
+qt = ["qtpy"]
+
+[tool.maturin]
+python-source = "python"
+module-name = "molview._core"
+features = ["pyo3/extension-module"]

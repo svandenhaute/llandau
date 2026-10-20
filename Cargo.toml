@@ -1,0 +1,19 @@
+[package]
+name = "molview"
+version = "0.1.0"
+edition = "2024"
+description = "Small wgpu viewer for atomic trajectories, embeddable in Qt (manim-slides) windows"
+license = "MIT"
+
+[lib]
+name = "molview"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+bytemuck = { version = "1.25.2", features = ["derive"] }
+glam = "0.34.1"
+numpy = "0.30.0"
+pollster = "1.0.1"
+pyo3 = { version = "0.30.1", features = ["abi3-py310"] }
+raw-window-handle = "0.6.2"
+wgpu = "30.0.1"
