@@ -35,7 +35,7 @@ landau png slides.py OUT_DIR
 Wheels for macOS and Linux (Python >= 3.10) are on the GitHub releases:
 
 ```
-pip install landau --find-links https://github.com/svandenhaute/landau/releases/expanded_assets/v0.1.0
+pip install landau --find-links https://github.com/svandenhaute/landau/releases/expanded_assets/v0.2.0
 ```
 
 or build it (needs Rust): `pip install maturin && maturin develop --release`
