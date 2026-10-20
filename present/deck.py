@@ -11,14 +11,14 @@
 """
 from __future__ import annotations
 
-from manim import AddTextLetterByLetter, Write, Text, Group, LaggedStart, DR
+from manim import AddTextLetterByLetter, Write, Text, Group, LaggedStart, DR, ImageMobject, config
 from manim_slides import Slide
 
 from .theme import DARK, LABEL, use
-from .layout import R, Region
+from .layout import R, Region, place
 from .text import text, title as _title
 from .media import layered_svg
-from .live import LIVE_PREFIX
+from . import live as _live
 
 __all__ = ["Deck", "order", "typewrite"]
 
@@ -70,11 +70,29 @@ class Deck(Slide):
             self.step(notes)
         return mobs[0] if len(mobs) == 1 else Group(*mobs)
 
-    def live(self, scene: str):
-        """The next step shows the live polyscope scene registered with @live_scene(scene) over the
-        slide (only with `present live`; elsewhere it is a normal step). Right after a reveal/step
-        this only marks the upcoming step; otherwise it also ends the current one."""
-        self.next_slide(notes=LIVE_PREFIX + scene)  # no wait: an empty step would be created
+    def live(self, scene: str, region: Region | None = None, still: bool = True, **view):
+        """The next step shows the 3D scene registered with @live_scene(scene) over region
+        (default R.body), interactive with `present live`. Right after a reveal/step this only
+        marks the upcoming step; otherwise it also ends the current one.
+
+        view     settings applied when the step starts (see present.live): camera, frame, style,
+                 sidechains, coloring, scrub_discrete, show, hide
+        still    also draw a still image of the view into the region (what the rendered slides
+                 show; the live view covers it). Returned, e.g. to replace it later; None without.
+        """
+        region = region if region is not None else R.body
+        width, height = config.frame_width, config.frame_height
+        fractions = ((region.x0 + width / 2) / width, (height / 2 - region.y1) / height,
+                     region.width / width, region.height / height)
+        theme = "light" if self.theme.bg.to_rgb().mean() > 0.5 else "dark"
+        self.next_slide(notes=_live.encode(scene, fractions, theme, view))  # no wait: no empty step
+        if not still:
+            return None
+        pixels = (round(2 * config.pixel_width * fractions[2]), round(2 * config.pixel_height * fractions[3]))
+        image = ImageMobject(_live.still(scene, theme, view, pixels))
+        place(image, region, fit="fill")
+        self.add(image)
+        return image
 
     def title(self, s: str, anim=None, pause: bool = False, **kwargs):
         """Slide title in the title band. By default added without ending the step."""

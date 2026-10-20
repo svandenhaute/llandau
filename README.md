@@ -43,27 +43,33 @@ External tools:
 | `layout` | `R` regions (`R.body.left.top`, `hsplit`, `grid`, `right_of(mob)`...), `place`, `below above left_of right_of align stack row`, gaps `XS S M L XL` |
 | `media` | `image svg layered_svg`; layered SVGs are split at render time, cached in `.present_cache/` |
 | `deck` | `Deck` (`step reveal title show_svg live`), `order`, `typewrite` |
-| `live` | `live_scene`, `present live`: polyscope on selected steps |
+| `live` | `live_scene`, `present live`: interactive 3D (molview) on selected steps |
 
 ## Live 3D steps
 
-With `pip install -e ".[live]"`, chosen steps can show an interactive [polyscope](https://polyscope.run)
-window over the slide, in manim-slides' Qt player (full screen; mirror the display for a projector):
+With `pip install -e ".[live]"` and [molview](../molview), chosen steps show an interactive
+3D view over a region of the slide, in manim-slides' Qt player:
 
 ```python
-@live_scene("spiral")
-def spiral(ps):                      # receives the polyscope module
-    ps.register_point_cloud("spiral", points)
+@live_scene("butane")
+def butane(viewer):                          # a molview.Viewer, in the deck's theme
+    viewer.load(positions, numbers)          # (frames, atoms, 3), (atoms,)
 
 class Results(Deck):
     def construct(self):
-        self.live("spiral")          # the next step shows the 3D window
-        self.reveal(text("3D here"))
+        self.live("butane", R.body.right)    # the next step shows it over R.body.right
+        self.reveal(place(text("3D here"), R.body.left))
+        self.live("butane", R.body.right, camera={"azimuth": 30}, frame=60)  # moves there
+        self.reveal(...)
 ```
 
 ```
 present render slides.py && present live slides.py
 ```
+
+Drag rotates, the wheel scrubs frames, pinch zooms; `,` `.` step frames, `P` plays, `D` toggles
+the discrete states, `0` resets the camera, the arrows change slides. The rendered slides (video,
+HTML, PDF) show a still image of each live view. See `present.live` for the view settings.
 
 Layer conventions for `show_svg`: steps are ordered by the first number in each Inkscape layer
 label (layers sharing a number appear together), saved visibility is ignored, and layers whose

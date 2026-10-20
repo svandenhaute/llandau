@@ -9,7 +9,7 @@ modules
     layout  R (screen regions), place, below/above/left_of/right_of, align, stack, row, gaps XS..XL
     media   image, svg, layered_svg (Inkscape layers split at render time, cached in .present_cache/)
     deck    Deck (base slide: step, reveal, title, show_svg), order, typewrite
-    live    live_scene, Deck.live: interactive polyscope 3D on chosen steps (`present live`)
+    live    live_scene, Deck.live: interactive 3D (molview) on chosen steps (`present live`)
     render  present render scene.py
 """
 from .theme import *

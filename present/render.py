@@ -4,7 +4,7 @@
     present render scene.py --only Masses QM   # render a few (no conversion)
     present render scene.py --present          # render all, then present
     present render scene.py -q l -- --disable_caching   # after --: passed to manim
-    present live scene.py                      # present with live polyscope steps (see present.live)
+    present live scene.py                      # present with live 3D steps (see present.live)
 """
 import argparse
 import ast
