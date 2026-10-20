@@ -221,10 +221,11 @@ class Mobject:
     def __deepcopy__(self, memo):
         result = self.__class__.__new__(self.__class__)
         memo[id(self)] = result
+        shared = getattr(self, "_shared_attributes", ())
         for key, value in self.__dict__.items():
             if key in ("target", "_saved_state"):
                 continue
-            setattr(result, key, _copy.deepcopy(value, memo))
+            setattr(result, key, value if key in shared else _copy.deepcopy(value, memo))
         return result
 
     def become(self, other: Mobject):
@@ -632,8 +633,10 @@ class VMobject(Mobject):
 
     def __init__(self, color=None, fill_color=None, fill_opacity: float = 0.0, stroke_color=None,
                  stroke_opacity: float = 1.0, stroke_width: float = DEFAULT_STROKE_WIDTH, z_index: float = 0,
-                 **kwargs):
+                 joint_type: str = "miter", cap_style: str = "butt", **kwargs):
         super().__init__(z_index=z_index)
+        self.joint_type = joint_type  # miter, round or bevel
+        self.cap_style = cap_style  # butt, round or square
         color = Color(color) if color is not None else WHITE
         self.fill_color = Color(fill_color) if fill_color is not None else color
         self.fill_opacity = fill_opacity
@@ -731,11 +734,12 @@ class VMobject(Mobject):
         return self
 
     def style_array(self) -> np.ndarray:
-        """fill RGBA, stroke RGBA, stroke width in frame units (the renderer's style)."""
+        """fill RGBA, stroke RGBA, stroke width in frame units, join, cap (the renderer's style)."""
         return np.concatenate([
             self.fill_color.rgb, [self.fill_color.alpha * self.fill_opacity],
             self.stroke_color.rgb, [self.stroke_color.alpha * self.stroke_opacity],
-            [0.01 * self.stroke_width],
+            [0.01 * self.stroke_width,
+             _JOINS.get(getattr(self, "joint_type", "miter"), 0), _CAPS.get(getattr(self, "cap_style", "butt"), 0)],
         ]).astype(np.float32)
 
     # --- points ------------------------------------------------------------------
@@ -907,6 +911,10 @@ class VMobject(Mobject):
             self.stroke_opacity = mix(start.stroke_opacity, end.stroke_opacity)
             self.stroke_width = mix(start.stroke_width, end.stroke_width)
         return self
+
+
+_JOINS = {"miter": 0, "round": 1, "bevel": 2}
+_CAPS = {"butt": 0, "round": 1, "square": 2, "projecting": 2}
 
 
 class VGroup(VMobject):

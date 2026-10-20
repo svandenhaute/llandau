@@ -91,6 +91,12 @@ def always_redraw(function):
     return mobject
 
 
+def _visible(m: VMobject) -> bool:
+    fill = m.fill_opacity * m.fill_color.alpha > 0
+    stroke = m.stroke_opacity * m.stroke_color.alpha > 0 and m.stroke_width > 0
+    return fill or stroke
+
+
 def _drawable(m) -> bool:
     return (isinstance(m, VMobject) and len(m.points) >= 4) or isinstance(m, ImageMobject)
 
@@ -112,12 +118,17 @@ class _Builder:
         self.play_span = (0.0, 0.0)
         self.scene = None
         self.marks = 0
+        # live views: one viewer per (scene, theme); spans waiting for their step's end
+        self.viewers = {}
+        self.pending_lives = []
 
     # --- geometry ---------------------------------------------------------------------
 
-    def shape(self, m: VMobject) -> int | None:
+    def shape(self, m: VMobject, visible_only: bool = False) -> int | None:
         n = 4 * (len(m.points) // 4)
         if n == 0:
+            return None
+        if visible_only and not _visible(m):
             return None
         points = np.ascontiguousarray(m.points[:n, :2], dtype=np.float32)
         style = m.style_array()
@@ -154,7 +165,7 @@ class _Builder:
         if isinstance(m, ImageMobject):
             return ("image", self.placement(m))
         if isinstance(m, VMobject):
-            shape = self.shape(m)
+            shape = self.shape(m, visible_only=True)
             return None if shape is None else ("shape", shape)
         return None
 
@@ -280,6 +291,21 @@ class _Builder:
     def mark(self, t: float, slide: int, notes: str):
         self.slides.add_mark(t, slide, notes)
         self.marks += 1
+        for viewer, rect, start, enter, camera in self.pending_lives:
+            self.slides.add_live(viewer, rect, start, t, enter, camera)
+        self.pending_lives = []
+
+    def live(self, scene, name: str, theme: str, region, view: dict):
+        """Show live scene `name` over `region` until the next mark."""
+        from . import live
+        viewer = self.viewers.get((name, theme))
+        if viewer is None:
+            import riemann_viewer
+            viewer = self.viewers[(name, theme)] = riemann_viewer.Viewer(theme=theme)
+            live.build(viewer, name)
+        rect = ((region.x0 + region.x1) / 2, (region.y0 + region.y1) / 2, region.width, region.height)
+        enter = lambda v, view=dict(view): live.apply_view(v, view, camera=False)  # noqa: E731
+        self.pending_lives.append((viewer, rect, scene.time, enter, view.get("camera")))
 
 
 class Scene:
@@ -518,8 +544,8 @@ def build(scenes, background=None):
         builder.scene = scene
         builder.sync(scene, t)
         scene.construct()
-        if scene.time <= scene._slide_start:
-            scene.wait(0.05)  # a slide that only adds things still shows them
+        if scene.time <= scene._slide_start or builder.pending_lives:
+            scene.wait(0.05)  # a slide (or live step) that only adds things still shows them
         scene.next_slide()  # the end of the last step
         # a background other than the deck's (set in setup or construct): a rectangle behind everything
         bg = Color(scene.camera.background_color).to_rgba()

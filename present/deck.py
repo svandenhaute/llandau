@@ -73,23 +73,23 @@ class Deck(Scene):
 
     def live(self, scene: str, region: Region | None = None, still: bool = True, **view):
         """The next step shows the 3D scene registered with @live_scene(scene) over region
-        (default R.body), interactive with `present live`. Right after a reveal/step this only
+        (default R.body), live and interactive in the player. Right after a reveal/step this only
         marks the upcoming step; otherwise it also ends the current one.
 
         view     settings applied when the step starts (see present.live): camera, frame, style,
                  sidechains, shading, coloring, scrub_discrete, show, hide
-        still    also draw a still image of the view into the region (what the rendered slides
-                 show; the live view covers it). Returned, e.g. to replace it later; None without.
+        still    also draw a still image of the view into the region (what exports show; the live
+                 view covers it). Returned, e.g. to replace it later; None without.
         """
+        _live.check(view)
         region = region if region is not None else R.body
-        width, height = config.frame_width, config.frame_height
-        fractions = ((region.x0 + width / 2) / width, (height / 2 - region.y1) / height,
-                     region.width / width, region.height / height)
         theme = "light" if self.theme.bg.to_rgb().mean() > 0.5 else "dark"
-        self.next_slide(notes=_live.encode(scene, fractions, theme, view))  # no wait: no empty step
+        self.next_slide()  # no wait: no empty step
+        self._builder.live(self, scene, theme, region, view)
         if not still:
             return None
-        pixels = (round(2 * config.pixel_width * fractions[2]), round(2 * config.pixel_height * fractions[3]))
+        pixels = (round(2 * config.pixel_width * region.width / config.frame_width),
+                  round(2 * config.pixel_height * region.height / config.frame_height))
         image = ImageMobject(_live.still(scene, theme, view, pixels))
         place(image, region, fit="fill")
         self.add(image)

@@ -16,6 +16,9 @@ modules
     shapes     Line, Arrow, Circle, Dot, Rectangle, Polygon, ...
     animation  FadeIn, Write, Create, Transform, .animate, LaggedStart, ... and rate functions
     scene      Scene (add, play, wait, next_slide), build: scenes -> one timeline
+    axes       manim's NumberLine, Axes, NumberPlane, ParametricFunction, FunctionGraph
+    plot       Plot: matplotlib-style plots of numpy data (plot, scatter, fill_between, bar, hist,
+               errorbar, imshow, contour(f), legend, colorbar), revealed in steps
     theme      DARK / LIGHT, font, type scale (TITLE, BODY, SMALL, LABEL)
     text       text, bold, italic, eq, typst, title, bullets (Typst)
     layout     R (screen regions), place, below/above/left_of/right_of, align, stack, row, gaps XS..XL
@@ -28,6 +31,8 @@ from .mobject import *
 from .shapes import *
 from .animation import *
 from .scene import *
+from .axes import *
+from .plot import *
 from .theme import *
 from .layout import *
 from .text import *

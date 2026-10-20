@@ -18,7 +18,7 @@ from .theme import FONT, TITLE, BODY
 from .layout import R, place, stack, S
 from .media import CACHE_DIR
 
-__all__ = ["text", "bold", "italic", "eq", "typst", "title", "bullets", "NORMAL", "BOLD", "ITALIC"]
+__all__ = ["text", "texts", "bold", "italic", "eq", "typst", "title", "bullets", "NORMAL", "BOLD", "ITALIC"]
 
 NORMAL, BOLD, ITALIC = "NORMAL", "BOLD", "ITALIC"
 
@@ -41,14 +41,13 @@ def text(s: str, size: float = BODY, color=None, weight=NORMAL, slant=NORMAL,
         typst_markup = bool(_MATH.search(s))
     if typst_markup:
         return typst(s, size=size, color=color, weight=weight, slant=slant, **kwargs)
-    # each line as a Typst string, so nothing in it is markup; joined by line breaks
-    source = " \\\n".join(_typst_string(line) for line in s.replace(r"\$", "$").split("\n"))
-    mob = typst(source, size=size, color=color, weight=weight, slant=slant, **kwargs)
+    mob = typst(_plain(s), size=size, color=color, weight=weight, slant=slant, **kwargs)
     mob.plain_text = True
     return mob
 
 
 def _typst_string(line: str) -> str:
+    """A line as a Typst string: nothing in it is markup."""
     escaped = line.replace("\\", "\\\\").replace('"', '\\"')
     return f'#"{escaped}"'
 
@@ -65,8 +64,30 @@ def eq(s: str, size: float = BODY, **kwargs):
 def typst(src: str, size: float = BODY, color=None, weight=NORMAL, slant=NORMAL, **kwargs) -> SVGMobject:
     """Arbitrary Typst markup as a vector mobject, in the deck font and colour.
     Colours set inside the markup are kept; kwargs go to SVGMobject."""
+    return SVGMobject(str(_compile(_document(src, size, color, weight, slant))), height=None, **kwargs).scale(TYPST_SCALE)
+
+
+def texts(strings, size: float = BODY, color=None, weight=NORMAL, slant=NORMAL, **kwargs) -> list[SVGMobject]:
+    """text() of each string, typeset in one Typst run (e.g. tick labels)."""
+    sources = [s if _MATH.search(s) else _plain(s) for s in strings]
+    if not sources:
+        return []
+    doc = _document("\n#pagebreak()\n".join(sources), size, color, weight, slant)
+    out = []
+    for s, path in zip(strings, _compile_pages(doc, len(sources))):
+        mob = SVGMobject(str(path), height=None, **kwargs).scale(TYPST_SCALE)
+        mob.plain_text = not _MATH.search(s)
+        out.append(mob)
+    return out
+
+
+def _plain(s: str) -> str:
+    return " \\\n".join(_typst_string(line) for line in s.replace(r"\$", "$").split("\n"))
+
+
+def _document(src: str, size, color, weight, slant) -> str:
     fonts = ", ".join(f'"{f}"' for f in _math_fonts())
-    doc = "\n".join([
+    return "\n".join([
         "#set page(width: auto, height: auto, margin: 0pt, fill: none)",
         f'#set text(font: "{FONT}", size: {size}pt, fill: rgb("{ManimColor(color or theme.current().fg).to_hex()}"),'
         f' weight: "{"bold" if weight == BOLD else "regular"}", style: "{"italic" if slant == ITALIC else "normal"}")',
@@ -74,7 +95,6 @@ def typst(src: str, size: float = BODY, color=None, weight=NORMAL, slant=NORMAL,
         TYPST_PREAMBLE,
         src,
     ])
-    return SVGMobject(str(_compile(doc)), height=None, **kwargs).scale(TYPST_SCALE)
 
 
 @cache
@@ -97,6 +117,19 @@ def _compile(doc: str) -> Path:
             raise ValueError(f"typst failed on:\n{doc}\n\n{result.stderr}")
         tmp.replace(out)
     return out
+
+
+def _compile_pages(doc: str, pages: int) -> list[Path]:
+    """One SVG per page of a document."""
+    folder = CACHE_DIR / "typst" / hashlib.sha1(doc.encode()).hexdigest()[:16]
+    paths = [folder / f"{k}.svg" for k in range(1, pages + 1)]
+    if not all(p.exists() for p in paths):
+        folder.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(["typst", "compile", "-", str(folder / "{p}.svg")], input=doc, text=True,
+                                capture_output=True)
+        if result.returncode != 0:
+            raise ValueError(f"typst failed on:\n{doc}\n\n{result.stderr}")
+    return paths
 
 
 def title(s: str, size: float = TITLE, **kwargs):

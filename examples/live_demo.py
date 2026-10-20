@@ -1,11 +1,9 @@
 """Live 3D steps on a light deck: the butane dihedral scan.
 
-    present render examples/live_demo.py -q l && present live examples/live_demo.py --window
+    present play examples/live_demo.py
 """
 import numpy as np
 from ase.build import molecule
-from manim import *
-
 from present import *
 
 
@@ -44,8 +42,8 @@ class Live(Deck):
         notes = self.reveal(place(text("drag, scroll, pinch"), body_left), replace=before)
         second = self.live("butane", body_right, camera={"azimuth": 0, "elevation": 60}, frame=60,
                            show=["tangent"])
-        self.reveal(place(text("tangents, from above"), body_left), replace=[notes, first])
-        self.reveal(place(text("after"), R.body), replace=[second])
+        tangents = self.reveal(place(text("tangents, from above"), body_left), replace=[notes, first])
+        self.reveal(place(text("after"), R.body), replace=[second, tangents])
 
 
 SLIDES = order(Live)
