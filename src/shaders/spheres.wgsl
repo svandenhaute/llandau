@@ -29,6 +29,8 @@ struct VertexOut {
     @location(3) color: vec4<f32>,
     @location(4) uv: vec2<f32>,
     @location(5) joint: f32,
+    // the silhouette's radius in the plane through the center
+    @location(6) half_size: f32,
 };
 
 const MARGIN: f32 = 1.1;  // room for the antialiased edge
@@ -60,6 +62,7 @@ fn vs(@builtin(vertex_index) index: u32, sphere: Sphere) -> VertexOut {
     out.color = sphere.color;
     out.uv = uv;
     out.joint = select(0.0, 1.0, sphere.radius < 0.0);
+    out.half_size = half_size;
     return out;
 }
 
@@ -70,8 +73,10 @@ struct FragmentOut {
 
 @fragment
 fn fs(in: VertexOut) -> FragmentOut {
+    // pixels inside the silhouette, exactly (fwidth, per 2x2 block, makes a wobbly rim)
     let edge = length(in.uv);
-    let coverage = clamp((1.0 - edge) / max(fwidth(edge), 1e-6) + 0.5, 0.0, 1.0);
+    let pixels = (1.0 - edge) * in.half_size / pixel_size(in.center.z);
+    let coverage = clamp(pixels + 0.5, 0.0, 1.0);
     if coverage <= 0.0 {
         discard;
     }
@@ -85,7 +90,6 @@ fn fs(in: VertexOut) -> FragmentOut {
 
     var color = shade(linear(in.color.rgb), normal, -ray);
     if g.shading.x > 0.5 {
-        let pixels = (1.0 - edge) / max(fwidth(edge), 1e-6);
         let amount = (1.0 - in.joint) * outline(pixels, in.position.z);
         color = mix(linear(in.color.rgb), linear(g.outline.rgb), amount);
     }
@@ -113,7 +117,11 @@ fn linear(c: vec3<f32>) -> vec3<f32> {
 // How much of the outline color a fragment `pixels` from the silhouette takes,
 // at view depth `z`.
 fn outline(pixels: f32, z: f32) -> f32 {
-    let pixel_size = 2.0 * -z / (g.proj[1][1] * g.viewport.y);
-    let width = max(g.shading.y / pixel_size, g.shading.z);
+    let width = max(g.shading.y / pixel_size(z), g.shading.z);
     return OUTLINES * clamp(width - pixels + 0.5, 0.0, 1.0);
+}
+
+// The size of a pixel at view depth z, in angstrom.
+fn pixel_size(z: f32) -> f32 {
+    return 2.0 * -z / (g.proj[1][1] * g.viewport.y);
 }

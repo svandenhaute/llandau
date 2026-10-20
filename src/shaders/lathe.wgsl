@@ -37,6 +37,7 @@ struct VertexOut {
     @location(2) along: f32,
     @location(3) color_start: vec4<f32>,
     @location(4) color_end: vec4<f32>,
+    @location(5) radius: f32,
 };
 
 @vertex
@@ -63,6 +64,7 @@ fn vs(vertex: Vertex, instance: Instance) -> VertexOut {
     out.along = vertex.position.z;
     out.color_start = instance.color_start;
     out.color_end = instance.color_end;
+    out.radius = r;
     return out;
 }
 
@@ -73,9 +75,10 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
     let to_eye = normalize(-in.position);
     if g.shading.x > 0.5 {
         // distance from the axis as a fraction of the radius, in view; about
-        // linear across the tube on screen
+        // linear across the tube on screen (exact pixels: fwidth makes a wobbly rim)
         let across = sqrt(max(1.0 - pow(dot(normal, to_eye), 2.0), 0.0));
-        let pixels = (1.0 - across) / max(fwidth(across), 1e-6);
+        let pixel_size = 2.0 * -in.position.z / (g.proj[1][1] * g.viewport.y);
+        let pixels = (1.0 - across) * in.radius / pixel_size;
         return vec4(mix(linear(color.rgb), linear(g.outline.rgb), outline(pixels, in.position.z)), color.a);
     }
     return vec4(shade(linear(color.rgb), normal, to_eye), color.a);
