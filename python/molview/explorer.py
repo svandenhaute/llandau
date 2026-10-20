@@ -150,7 +150,7 @@ class Explorer(QWidget):
             )
 
         # layers
-        for layer in ["atoms", "trails", "ghost", "clashes", *viewer.vector_names, *viewer.point_names]:
+        for layer in ["atoms", "surface", "trails", "ghost", "clashes", *viewer.vector_names, *viewer.point_names]:
             try:
                 checked = viewer.is_visible(layer)
             except KeyError:
@@ -166,6 +166,10 @@ class Explorer(QWidget):
         layout.addLayout(sizes)
         self._slider(sizes, "atom radius", viewer.sizes["radius_scale"], 0.1, 2.0,
                      lambda v: viewer.set_sizes(radius_scale=v))
+        self._slider(sizes, "surface opacity", viewer.surface["opacity"], 0.05, 1.0,
+                     lambda v: viewer.set_surface(opacity=v))
+        sizes.addRow("surface color", combo(["uniform", "atoms"], viewer.surface["colors"],
+                                            lambda c: viewer.set_surface(colors=c)))
         for name in viewer.vector_names:
             scale = viewer.vector_scale(name)
             self._slider(sizes, f"{name} length", scale, 0.0, 4.0 * scale,

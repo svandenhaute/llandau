@@ -6,6 +6,7 @@ pub mod clash;
 pub mod protein;
 pub mod render;
 pub mod scene;
+pub mod surface;
 pub mod theme;
 
 use std::ffi::c_void;
@@ -20,7 +21,7 @@ use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
 use camera::Camera;
 use render::{Gpu, Renderer};
-use scene::{Coloring, Ghost, Points, Scene, Sidechains, Structure, Style, VectorField};
+use scene::{Coloring, Ghost, Points, Scene, Sidechains, Structure, Style, SurfaceColors, VectorField};
 use theme::{Rgba, Theme};
 
 fn runtime_error(message: impl std::fmt::Display) -> PyErr {
@@ -542,7 +543,7 @@ impl Viewer {
         Ok(())
     }
 
-    /// Visibility of a layer: "atoms", "trails", "ghost", "clashes", or the name of
+    /// Visibility of a layer: "atoms", "trails", "ghost", "clashes", "surface", or the name of
     /// a vector field or a point set.
     fn set_visible(&mut self, layer: &str, visible: bool) -> PyResult<()> {
         let s = &mut self.scene;
@@ -550,6 +551,7 @@ impl Viewer {
             "atoms" => s.show_atoms = visible,
             "trails" => s.trails.visible = visible,
             "clashes" => s.show_clashes = visible,
+            "surface" => s.surface.visible = visible,
             "ghost" => match &mut s.ghost {
                 Some(ghost) => ghost.visible = visible,
                 None => return Err(PyKeyError::new_err("no ghost")),
@@ -570,6 +572,7 @@ impl Viewer {
             "atoms" => s.show_atoms,
             "trails" => s.trails.visible,
             "clashes" => s.show_clashes,
+            "surface" => s.surface.visible,
             "ghost" => s.ghost.as_ref().is_some_and(|g| g.visible),
             name => match (s.vectors.get(name), s.points.get(name)) {
                 (Some(field), _) => field.visible,
@@ -748,6 +751,50 @@ impl Viewer {
             ghost.opacity = opacity;
             self.changed();
         }
+    }
+
+    /// The molecular surface (show it with set_visible("surface", True)): a smooth
+    /// envelope of the van der Waals spheres of the heavy atoms (protein style) or
+    /// all atoms. opacity < 1 draws only its front layer, over the rest; colors:
+    /// "uniform" (the theme's) or "atoms" (the nearest atom's); spacing: grid (Å);
+    /// sharpness: higher hugs the spheres, lower is smoother; scale multiplies the radii.
+    #[pyo3(signature = (opacity = None, colors = None, spacing = None, sharpness = None, scale = None))]
+    fn set_surface(
+        &mut self,
+        opacity: Option<f32>,
+        colors: Option<&str>,
+        spacing: Option<f32>,
+        sharpness: Option<f32>,
+        scale: Option<f32>,
+    ) -> PyResult<()> {
+        let surface = &mut self.scene.surface;
+        if let Some(colors) = colors {
+            surface.colors = match colors {
+                "uniform" => SurfaceColors::Uniform,
+                "atoms" => SurfaceColors::Atoms,
+                _ => return Err(value_error(format!("unknown surface colors {colors:?}; uniform or atoms"))),
+            };
+        }
+        surface.opacity = opacity.unwrap_or(surface.opacity);
+        let settings = &mut surface.settings;
+        settings.spacing = spacing.unwrap_or(settings.spacing);
+        settings.sharpness = sharpness.unwrap_or(settings.sharpness);
+        settings.scale = scale.unwrap_or(settings.scale);
+        self.changed();
+        Ok(())
+    }
+
+    #[getter]
+    fn surface<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let surface = &self.scene.surface;
+        let dict = PyDict::new(py);
+        dict.set_item("visible", surface.visible)?;
+        dict.set_item("opacity", surface.opacity)?;
+        dict.set_item("colors", if surface.colors == SurfaceColors::Atoms { "atoms" } else { "uniform" })?;
+        dict.set_item("spacing", surface.settings.spacing)?;
+        dict.set_item("sharpness", surface.settings.sharpness)?;
+        dict.set_item("scale", surface.settings.scale)?;
+        Ok(dict)
     }
 
     /// Van der Waals overlap (Å) above which two atoms clash.

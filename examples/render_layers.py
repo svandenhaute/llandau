@@ -48,6 +48,11 @@ print("clashes in frame 10:", len(viewer.clashes()))
 save("5_protein_spheres_clashes")
 viewer.set_visible("clashes", False)
 viewer.sidechains = "sticks"
+viewer.set_visible("trails", False)
+viewer.set_visible("surface", True)
+save("5b_protein_surface")
+viewer.set_visible("surface", False)
+viewer.set_visible("trails", True)
 displacement = np.linalg.norm(positions - positions.mean(axis=0), axis=-1)
 viewer.color_by("displacement", displacement, cmap="fire")
 viewer.coloring = "displacement"

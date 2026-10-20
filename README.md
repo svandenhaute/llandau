@@ -19,6 +19,8 @@ from molview.explorer import explore
 viewer = Viewer(theme="light").load(positions, numbers, roles=roles)   # (frames, atoms, 3), (atoms,)
 viewer.style = "protein"                      # or "atoms" (ball and stick)
 viewer.sidechains = "spheres"                 # van der Waals spheres; or "sticks"
+viewer.set_visible("surface", True)           # translucent molecular surface around the heavy atoms
+viewer.set_surface(opacity=0.4, colors="uniform", sharpness=2.0)   # colors="atoms": nearest atom's color
 viewer.set_visible("clashes", True)           # vdW overlap > viewer.clash_overlap (Å), beyond 3 bonds
 viewer.set_trails(segment_ids=segment_ids(t, spline.segment_boundaries))
 viewer.add_vectors("tangent", tangents, scale=1.5)

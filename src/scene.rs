@@ -8,6 +8,7 @@ use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 
 use crate::clash;
+use crate::surface::{self, MeshVertex};
 use crate::protein::{self, ALPHA, HYDROGEN, SIDECHAIN};
 use crate::theme::{self, Rgba, Theme};
 
@@ -47,6 +48,9 @@ pub struct Geometry {
     pub ghost_tubes: Vec<LatheInstance>,
     /// drawn over everything (clash links)
     pub overlay: Vec<LatheInstance>,
+    /// triangle list of the molecular surface, opaque or translucent (front layer only)
+    pub surface: Vec<MeshVertex>,
+    pub ghost_surface: Vec<MeshVertex>,
 }
 
 pub struct Structure {
@@ -177,6 +181,22 @@ pub struct Trails {
     pub radius: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SurfaceColors {
+    /// the theme's surface color
+    Uniform,
+    /// the color of the nearest atom (element colors or the coloring in use)
+    Atoms,
+}
+
+/// A Gaussian molecular surface around the heavy atoms (protein style) or all atoms.
+pub struct Surface {
+    pub visible: bool,
+    pub opacity: f32,
+    pub colors: SurfaceColors,
+    pub settings: surface::Settings,
+}
+
 pub struct Ghost {
     pub positions: Vec<Vec3>,
     pub visible: bool,
@@ -204,6 +224,7 @@ pub struct Scene {
     /// name of the coloring in use; None: element colors
     pub coloring: Option<String>,
     pub ghost: Option<Ghost>,
+    pub surface: Surface,
     pub show_clashes: bool,
     pub clash_overlap: f32,
     /// the frame index walks the discrete states instead of the path frames
@@ -241,6 +262,12 @@ impl Default for Scene {
             colorings: BTreeMap::new(),
             coloring: None,
             ghost: None,
+            surface: Surface {
+                visible: false,
+                opacity: 0.4,
+                colors: SurfaceColors::Uniform,
+                settings: surface::Settings { spacing: 0.5, sharpness: 2.0, scale: 1.0 },
+            },
             show_clashes: false,
             clash_overlap: 0.4,
             scrub_discrete: false,
@@ -354,6 +381,20 @@ impl Scene {
                 }
                 None => {}
             }
+        }
+        if self.surface.visible {
+            let opacity = self.surface.opacity.clamp(0.0, 1.0);
+            let atoms: Vec<usize> = match self.style {
+                Style::Protein if s.roles.is_some() => (0..s.num_atoms).filter(|&a| s.role(a) != Some(HYDROGEN)).collect(),
+                _ => (0..s.num_atoms).collect(),
+            };
+            let tint: Vec<Rgba> = match self.surface.colors {
+                SurfaceColors::Uniform => vec![self.theme.surface; s.num_atoms],
+                SurfaceColors::Atoms => colors.clone(),
+            };
+            let tint: Vec<Rgba> = tint.iter().map(|c| [c[0], c[1], c[2], opacity]).collect();
+            let mesh = surface::gaussian_surface(positions, &s.vdw, &tint, &atoms, &self.surface.settings);
+            if opacity < 1.0 { out.ghost_surface = mesh } else { out.surface = mesh }
         }
         for points in self.points.values().filter(|p| p.visible) {
             out.spheres.extend(points.positions.iter().zip(&points.colors).map(|(p, c)| SphereInstance {

@@ -13,6 +13,7 @@ use wgpu::util::DeviceExt;
 
 use crate::camera::Camera;
 use crate::scene::{Geometry, LatheInstance, SphereInstance};
+use crate::surface::MeshVertex;
 
 pub const SAMPLES: u32 = 4;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -58,6 +59,8 @@ struct Globals {
 enum Shader {
     Spheres,
     Lathe,
+    /// plain triangle lists (not instanced)
+    Mesh,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -81,6 +84,8 @@ pub enum Slot {
     GhostSpheres,
     GhostTubes,
     Overlay,
+    Surface,
+    GhostSurface,
 }
 
 struct Targets {
@@ -140,6 +145,7 @@ pub struct Renderer {
     layout: wgpu::PipelineLayout,
     sphere_shader: wgpu::ShaderModule,
     lathe_shader: wgpu::ShaderModule,
+    mesh_shader: wgpu::ShaderModule,
     pipelines: HashMap<(wgpu::TextureFormat, Shader, Variant), wgpu::RenderPipeline>,
     targets: Option<Targets>,
     tube: Mesh,
@@ -187,6 +193,7 @@ impl Renderer {
             layout,
             sphere_shader: device.create_shader_module(wgpu::include_wgsl!("shaders/spheres.wgsl")),
             lathe_shader: device.create_shader_module(wgpu::include_wgsl!("shaders/lathe.wgsl")),
+            mesh_shader: device.create_shader_module(wgpu::include_wgsl!("shaders/mesh.wgsl")),
             pipelines: HashMap::new(),
             targets: None,
             tube: Mesh::new(device, "tube", &tube_mesh(24)),
@@ -209,6 +216,8 @@ impl Renderer {
         self.upload_slot(device, queue, Slot::GhostSpheres, &geometry.ghost_spheres);
         self.upload_slot(device, queue, Slot::GhostTubes, &geometry.ghost_tubes);
         self.upload_slot(device, queue, Slot::Overlay, &geometry.overlay);
+        self.upload_slot(device, queue, Slot::Surface, &geometry.surface);
+        self.upload_slot(device, queue, Slot::GhostSurface, &geometry.ghost_surface);
     }
 
     pub fn upload_trails(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, trails: &[LatheInstance]) {
@@ -229,15 +238,19 @@ impl Renderer {
             self.targets = Some(create_targets(device, format, size));
         }
         // (slot, shader, mesh, variant) in draw order
-        let passes: [(Slot, Shader, Option<&Mesh>, Variant); 9] = [
+        let passes: [(Slot, Shader, Option<&Mesh>, Variant); 12] = [
             (Slot::Spheres, Shader::Spheres, None, Variant::Opaque),
             (Slot::Tubes, Shader::Lathe, Some(&self.tube), Variant::Opaque),
             (Slot::Cones, Shader::Lathe, Some(&self.cone), Variant::Opaque),
+            (Slot::Surface, Shader::Mesh, None, Variant::Opaque),
             (Slot::Trails, Shader::Lathe, Some(&self.thin_tube), Variant::Blended),
             (Slot::GhostSpheres, Shader::Spheres, None, Variant::GhostDepth),
             (Slot::GhostTubes, Shader::Lathe, Some(&self.tube), Variant::GhostDepth),
             (Slot::GhostSpheres, Shader::Spheres, None, Variant::GhostColor),
             (Slot::GhostTubes, Shader::Lathe, Some(&self.tube), Variant::GhostColor),
+            // the translucent surface over everything else, its front layer only
+            (Slot::GhostSurface, Shader::Mesh, None, Variant::GhostDepth),
+            (Slot::GhostSurface, Shader::Mesh, None, Variant::GhostColor),
             (Slot::Overlay, Shader::Lathe, Some(&self.thin_tube), Variant::Overlay),
         ];
         for &(_, shader, _, variant) in &passes {
@@ -287,13 +300,17 @@ impl Renderer {
                     continue;
                 };
                 pass.set_pipeline(&self.pipelines[&(format, shader, variant)]);
-                match mesh {
-                    Some(mesh) => {
+                match (shader, mesh) {
+                    (_, Some(mesh)) => {
                         pass.set_vertex_buffer(0, mesh.buffer.slice(..));
                         pass.set_vertex_buffer(1, buffer.slice(..));
                         pass.draw(0..mesh.vertices, 0..*count);
                     }
-                    None => {
+                    (Shader::Mesh, None) => {
+                        pass.set_vertex_buffer(0, buffer.slice(..));
+                        pass.draw(0..*count, 0..1);
+                    }
+                    (_, None) => {
                         pass.set_vertex_buffer(0, buffer.slice(..));
                         pass.draw(0..4, 0..*count);
                     }
@@ -358,7 +375,18 @@ impl Renderer {
                 attributes: &lathe_attributes,
             }),
         ];
+        let surface_attributes = [
+            attribute(0, 0, wgpu::VertexFormat::Float32x3),
+            attribute(1, 12, wgpu::VertexFormat::Float32x3),
+            attribute(2, 24, wgpu::VertexFormat::Float32x4),
+        ];
+        let surface_buffers = [Some(wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<MeshVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &surface_attributes,
+        })];
         let (module, buffers, topology, cull_mode): (_, &[_], _, _) = match shader {
+            Shader::Mesh => (&self.mesh_shader, &surface_buffers, wgpu::PrimitiveTopology::TriangleList, None),
             Shader::Spheres => (&self.sphere_shader, &sphere_buffers, wgpu::PrimitiveTopology::TriangleStrip, None),
             Shader::Lathe => {
                 (&self.lathe_shader, &lathe_buffers, wgpu::PrimitiveTopology::TriangleList, Some(wgpu::Face::Back))
