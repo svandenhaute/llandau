@@ -12,6 +12,8 @@ pub struct Theme {
     pub tube: Rgba,
     pub clash: Rgba,
     pub surface: Rgba,
+    /// outlines in flat shading
+    pub outline: Rgba,
 }
 
 const fn gray(value: f32) -> Rgba {
@@ -26,6 +28,7 @@ pub const LIGHT: Theme = Theme {
     tube: [0.55, 0.62, 0.75, 1.0],
     clash: [0.85, 0.1, 0.75, 1.0], // magenta: not an element color
     surface: [0.6, 0.67, 0.8, 1.0],
+    outline: gray(0.12),
 };
 
 pub const DARK: Theme = Theme {
@@ -36,6 +39,7 @@ pub const DARK: Theme = Theme {
     tube: [0.45, 0.55, 0.7, 1.0],
     clash: [1.0, 0.3, 0.9, 1.0],
     surface: [0.5, 0.58, 0.72, 1.0],
+    outline: gray(0.05),
 };
 
 impl Theme {

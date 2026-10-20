@@ -73,6 +73,8 @@ pub trait Controls {
     fn theme(&self) -> &'static str;
     fn set_theme(&mut self, name: &str);
     fn has_roles(&self) -> bool;
+    fn shading(&self) -> &'static str;
+    fn set_shading(&mut self, shading: &str);
     fn style(&self) -> &'static str;
     fn set_style(&mut self, style: &str);
     fn sidechains(&self) -> &'static str;
@@ -444,6 +446,8 @@ impl<V: Explorable> App<'_, V> {
         egui::Grid::new("appearance").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
             choice(ui, "theme", &["light", "dark"], controls.theme(), |name| controls.set_theme(name));
             ui.end_row();
+            choice(ui, "shading", &["lit", "flat"], controls.shading(), |s| controls.set_shading(s));
+            ui.end_row();
             if controls.has_roles() {
                 choice(ui, "style", &["atoms", "protein"], controls.style(), |s| controls.set_style(s));
                 ui.end_row();
@@ -714,7 +718,7 @@ mod tests {
         let mut current = "uniform".to_string();
         let mut option_rects: Vec<(String, egui::Rect)> = Vec::new();
         let mut combo_rect = egui::Rect::NOTHING;
-        let mut frame = |events: Vec<egui::Event>, current: &mut String, option_rects: &mut Vec<(String, egui::Rect)>, combo_rect: &mut egui::Rect| {
+        let frame = |events: Vec<egui::Event>, current: &mut String, option_rects: &mut Vec<(String, egui::Rect)>, combo_rect: &mut egui::Rect| {
             let input = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0))),
                 events,

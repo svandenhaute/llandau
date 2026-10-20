@@ -63,6 +63,17 @@ def test_ghost_and_discrete(viewer):
     assert drawn(viewer.render_image(160, 120)) > 0.01
 
 
+def test_flat_shading(viewer):
+    lit = viewer.render_image(160, 120)
+    viewer.shading = "flat"
+    assert viewer.shading == "flat"
+    flat = viewer.render_image(160, 120)
+    assert drawn(flat) > 0.01
+    assert np.abs(flat.astype(int) - lit.astype(int)).max() > 30
+    with pytest.raises(ValueError):
+        viewer.shading = "glossy"
+
+
 def test_dark_theme(viewer):
     viewer.theme = "dark"
     image = viewer.render_image(160, 120)

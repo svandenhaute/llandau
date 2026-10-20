@@ -16,6 +16,8 @@ use crate::theme::{self, Rgba, Theme};
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct SphereInstance {
     pub center: [f32; 3],
+    /// negative for joints: spheres that fill the gaps between cylinders,
+    /// which flat shading draws without an outline
     pub radius: f32,
     pub color: Rgba,
 }
@@ -432,6 +434,7 @@ impl Scene {
         tubes: &mut Vec<LatheInstance>,
     ) {
         let sphere = |p: Vec3, radius: f32, color: Rgba| SphereInstance { center: p.to_array(), radius, color };
+        let joint = |p: Vec3, radius: f32, color: Rgba| sphere(p, -radius, color);
 
         if self.style == Style::Atoms || s.roles.is_none() {
             let bond = palette.bond;
@@ -459,7 +462,7 @@ impl Scene {
                 let ((p, si, ti), (q, sj, tj)) = (pair[0], pair[1]);
                 tubes.push(LatheInstance::new(p, q, self.tube_radius, color_at(si, ti), color_at(sj, tj)));
             }
-            spheres.extend(samples.iter().map(|&(p, si, ti)| sphere(p, self.tube_radius, color_at(si, ti))));
+            spheres.extend(samples.iter().map(|&(p, si, ti)| joint(p, self.tube_radius, color_at(si, ti))));
             residue += chain.len();
         }
 
@@ -479,7 +482,7 @@ impl Scene {
                 }
                 let mut joints: Vec<usize> = joints.into_iter().filter(|&a| roles[a] != ALPHA).collect();
                 joints.sort_unstable();
-                spheres.extend(joints.iter().map(|&a| sphere(positions[a], self.stick_radius, colors[a])));
+                spheres.extend(joints.iter().map(|&a| joint(positions[a], self.stick_radius, colors[a])));
             }
             Sidechains::Spheres => {
                 spheres.extend(

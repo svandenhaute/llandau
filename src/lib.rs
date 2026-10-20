@@ -131,6 +131,7 @@ impl Viewer {
             self.renderer.upload_trails(&self.gpu.device, &self.gpu.queue, &trails);
         }
         self.renderer.background = self.scene.theme.background;
+        self.renderer.outline = self.scene.theme.outline;
         self.stale = (false, false);
     }
 
@@ -538,6 +539,23 @@ impl Viewer {
     #[setter]
     fn set_color_gamma(&mut self, gamma: f32) {
         self.renderer.color_gamma = gamma.max(0.1);
+    }
+
+    /// "lit" (lighting and highlights) or "flat" (plain colors with a dark
+    /// outline, as cinemol draws them).
+    #[getter]
+    fn shading(&self) -> &'static str {
+        if self.renderer.flat { "flat" } else { "lit" }
+    }
+
+    #[setter]
+    fn set_shading(&mut self, shading: &str) -> PyResult<()> {
+        self.renderer.flat = match shading {
+            "lit" => false,
+            "flat" => true,
+            _ => return Err(value_error(format!("unknown shading {shading:?}; lit or flat"))),
+        };
+        Ok(())
     }
 
     /// "atoms" (ball and stick) or "protein" (backbone tube and side chains; needs roles).
@@ -1011,6 +1029,12 @@ impl window::Controls for Viewer {
     }
     fn has_roles(&self) -> bool {
         Viewer::has_roles(self)
+    }
+    fn shading(&self) -> &'static str {
+        Viewer::shading(self)
+    }
+    fn set_shading(&mut self, shading: &str) {
+        let _ = Viewer::set_shading(self, shading);
     }
     fn style(&self) -> &'static str {
         Viewer::style(self)

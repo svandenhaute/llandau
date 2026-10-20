@@ -7,8 +7,14 @@ struct Globals {
     proj: mat4x4<f32>,
     viewport: vec4<f32>,
     light: vec4<f32>,
+    // x: 1 for flat shading; y: outline width in angstrom, z: at least this many pixels
+    shading: vec4<f32>,
+    outline: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> g: Globals;
+
+// 0 for pipelines whose flat shading leaves out the outline (trails, overlays)
+override OUTLINES: f32 = 1.0;
 
 struct Vertex {
     // on the unit mesh: radius 1 in xy, length 1 along z
@@ -64,7 +70,15 @@ fn vs(vertex: Vertex, instance: Instance) -> VertexOut {
 fn fs(in: VertexOut) -> @location(0) vec4<f32> {
     let color = select(in.color_start, in.color_end, in.along > 0.5);
     let normal = normalize(in.normal);
-    return vec4(shade(linear(color.rgb), normal, normalize(-in.position)), color.a);
+    let to_eye = normalize(-in.position);
+    if g.shading.x > 0.5 {
+        // distance from the axis as a fraction of the radius, in view; about
+        // linear across the tube on screen
+        let across = sqrt(max(1.0 - pow(dot(normal, to_eye), 2.0), 0.0));
+        let pixels = (1.0 - across) / max(fwidth(across), 1e-6);
+        return vec4(mix(linear(color.rgb), linear(g.outline.rgb), outline(pixels, in.position.z)), color.a);
+    }
+    return vec4(shade(linear(color.rgb), normal, to_eye), color.a);
 }
 
 fn shade(color: vec3<f32>, normal: vec3<f32>, to_eye: vec3<f32>) -> vec3<f32> {
@@ -79,4 +93,12 @@ fn shade(color: vec3<f32>, normal: vec3<f32>, to_eye: vec3<f32>) -> vec3<f32> {
 // sets how dark and saturated they come out.
 fn linear(c: vec3<f32>) -> vec3<f32> {
     return pow(max(c, vec3(0.0)), vec3(g.light.w));
+}
+
+// How much of the outline color a fragment `pixels` from the silhouette takes,
+// at view depth `z`.
+fn outline(pixels: f32, z: f32) -> f32 {
+    let pixel_size = 2.0 * -z / (g.proj[1][1] * g.viewport.y);
+    let width = max(g.shading.y / pixel_size, g.shading.z);
+    return OUTLINES * clamp(width - pixels + 0.5, 0.0, 1.0);
 }

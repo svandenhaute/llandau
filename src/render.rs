@@ -18,6 +18,9 @@ use crate::surface::MeshVertex;
 pub const SAMPLES: u32 = 4;
 /// Between the raw table colors (1.0, washed out) and an exact sRGB decode (2.2).
 pub const DEFAULT_COLOR_GAMMA: f32 = 1.6;
+/// Outline in flat shading: this many angstrom wide, but at least this many pixels.
+const OUTLINE_WIDTH: f32 = 0.04;
+const OUTLINE_MIN_PIXELS: f32 = 1.2;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 pub struct Gpu {
@@ -60,6 +63,8 @@ struct Globals {
     proj: [[f32; 4]; 4],
     viewport: [f32; 4],
     light: [f32; 4],
+    shading: [f32; 4],
+    outline: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -162,6 +167,9 @@ pub struct Renderer {
     pub background: [f32; 4],
     /// decoding gamma of the colors (see linear() in the shaders)
     pub color_gamma: f32,
+    /// flat colors with an outline instead of lighting
+    pub flat: bool,
+    pub outline: [f32; 4],
 }
 
 impl Renderer {
@@ -211,6 +219,8 @@ impl Renderer {
             slots: HashMap::new(),
             background: [1.0, 1.0, 1.0, 1.0],
             color_gamma: DEFAULT_COLOR_GAMMA,
+            flat: false,
+            outline: [0.0, 0.0, 0.0, 1.0],
         }
     }
 
@@ -282,6 +292,8 @@ impl Renderer {
             proj: camera.projection(aspect).to_cols_array_2d(),
             viewport: [viewport[2], viewport[3], 0.0, 0.0],
             light: light.extend(self.color_gamma).to_array(),
+            shading: [if self.flat { 1.0 } else { 0.0 }, OUTLINE_WIDTH, OUTLINE_MIN_PIXELS, 0.0],
+            outline: self.outline,
         };
         queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
 
@@ -409,6 +421,11 @@ impl Renderer {
             }
         };
         let targets = [Some(wgpu::ColorTargetState { format, blend, write_mask })];
+        let outlines = match variant {
+            Variant::Blended | Variant::Overlay => 0.0,
+            _ => 1.0,
+        };
+        let constants = [("OUTLINES", outlines)];
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(&format!("{shader:?} {variant:?}")),
             layout: Some(&self.layout),
@@ -430,7 +447,7 @@ impl Renderer {
             fragment: Some(wgpu::FragmentState {
                 module,
                 entry_point: Some("fs"),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions { constants: &constants, ..Default::default() },
                 targets: &targets,
             }),
             multiview_mask: None,
