@@ -24,18 +24,7 @@ class Viewer(_Viewer):
 
     def __init__(self, theme="light"):
         super().__init__()
-        self._numbers = None
         self.theme = theme
-
-    @property
-    def theme(self):
-        return super().theme
-
-    @theme.setter
-    def theme(self, name):
-        _Viewer.theme.__set__(self, name)
-        if self._numbers is not None:
-            self.set_colors(elements.colors(self._numbers, name))
 
     def load(self, positions, numbers, edges=None, roles=None, backbone_colormap="rainbow"):
         """Set a trajectory from positions (frames, atoms, 3) and atomic numbers (atoms,).
@@ -48,7 +37,6 @@ class Viewer(_Viewer):
         if positions.ndim == 2:
             positions = positions[None]
         numbers = np.asarray(numbers)
-        self._numbers = numbers
         if edges is None:
             edges = elements.infer_bonds(positions[0], numbers)
         self.set_structure(
@@ -59,6 +47,8 @@ class Viewer(_Viewer):
             edges,
             roles,
         )
+        for theme in ("light", "dark"):  # element colors follow the theme
+            self.set_colors(elements.colors(numbers, theme), theme)
         if roles is not None and backbone_colormap:
             num_alpha = int((np.asarray(roles) == 3).sum())
             self.set_backbone_colors(colormaps.apply(np.linspace(0, 1, num_alpha), backbone_colormap, normalize=False))
@@ -67,8 +57,8 @@ class Viewer(_Viewer):
     def set_structure(self, positions, radii, vdw_radii, colors, edges, roles=None):
         super().set_structure(_f32(positions), _f32(radii), _f32(vdw_radii), _f32(colors), _i64(edges), _i64(roles))
 
-    def set_colors(self, colors):
-        super().set_colors(_f32(colors))
+    def set_colors(self, colors, theme=None):
+        super().set_colors(_f32(colors), theme)
 
     def set_backbone_colors(self, colors=None):
         super().set_backbone_colors(_f32(colors))
@@ -87,10 +77,6 @@ class Viewer(_Viewer):
 
     def set_discrete_frames(self, positions=None):
         super().set_discrete_frames(_f32(positions))
-
-    def reset(self):
-        super().reset()
-        self._numbers = None
 
     def add_coloring(self, name, colors):
         super().add_coloring(name, _f32(colors))

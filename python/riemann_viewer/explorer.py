@@ -7,10 +7,12 @@
     viewer.add_vectors("tangent", tangents)
     explore(viewer, plots={"energy": energy})   # blocks until the window closes
 
-Mouse: drag rotates, right drag (or shift + drag) pans, the wheel scrubs frames,
+Mouse: drag rotates, right drag (or shift + drag) pans, the wheel scrubs frames
+(faster when scrolling fast and for long trajectories; shift: frame by frame),
 ctrl + wheel or a pinch zooms, a double click resets the camera. Keys: space plays,
-, and . step frames, D toggles the discrete states, 0 resets the camera, Escape
-closes. No Qt needed: the window is part of riemann_viewer (winit + egui).
+, and . step frames (shift: 5% of them), Home and End go to the first and last
+frame, D toggles the discrete states, 0 resets the camera, Escape closes. No Qt
+needed: the window is part of riemann_viewer (winit + egui).
 """
 from __future__ import annotations
 

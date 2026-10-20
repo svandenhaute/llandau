@@ -1,6 +1,6 @@
 [package]
 name = "riemann_viewer"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 description = "Small wgpu viewer for atomic trajectories, embeddable in Qt (manim-slides) windows"
 license = "MIT"

@@ -1,8 +1,10 @@
 //! The explorer: a native window (winit) with the 3D view and a panel of
 //! controls and plots (egui), drawn with the viewer's own GPU device.
 //!
-//! Keys: space plays, , and . step frames, D toggles the discrete states,
-//! 0 resets the camera, Escape closes.
+//! Keys: space plays, , and . step frames (with shift: 5% of them), Home and
+//! End go to the first and last frame, D toggles the discrete states, 0 resets
+//! the camera, Escape closes. Scrolling scrubs, faster when scrolling fast and
+//! for long trajectories; with shift, frame by frame.
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -23,8 +25,13 @@ use crate::render::{Gpu, Offscreen};
 
 const PANEL_WIDTH: f32 = 300.0;
 const PLAY_INTERVAL: Duration = Duration::from_millis(33);
-/// Wheel or trackpad points per frame when scrubbing.
+/// Wheel or trackpad points per frame when scrubbing slowly, for up to this many frames.
 const SCROLL_PER_FRAME: f32 = 12.0;
+const SHORT_TRAJECTORY: f32 = 200.0;
+/// Scrolling faster than this (points per second) speeds up the scrubbing ...
+const SCROLL_SPEED: f32 = 400.0;
+/// ... up to this factor.
+const MAX_ACCELERATION: f32 = 10.0;
 
 thread_local! {
     // winit allows one event loop per process; each explore() reuses it.
@@ -112,6 +119,7 @@ struct App<'a, V: Explorable> {
     playing: bool,
     last_step: Instant,
     scroll: f32,
+    last_scroll: Instant,
     initial_scales: Vec<(String, f32)>,
     status: String,
     frames_drawn: u32,
@@ -138,6 +146,7 @@ pub fn explore<V: Explorable>(viewer: &mut V, py: Python<'_>, options: Options) 
             playing: false,
             last_step: Instant::now(),
             scroll: 0.0,
+            last_scroll: Instant::now(),
             initial_scales,
             status: String::new(),
             frames_drawn: 0,
@@ -338,10 +347,12 @@ impl<V: Explorable> App<'_, V> {
         if pressed(Key::Space) {
             self.playing = !self.playing;
         }
-        for (key, step) in [(Key::Comma, -1i64), (Key::Period, 1)] {
+        // shift: jump 5% of the trajectory (at least 10 frames)
+        let count = controls.num_frames().max(1) as i64;
+        let jump = if ui.input(|i| i.modifiers.shift) { (count / 20).max(10) } else { 1 };
+        for (key, step) in [(Key::Comma, -jump), (Key::Period, jump), (Key::Home, -count), (Key::End, count)] {
             if pressed(key) {
-                let frame = (controls.frame() as i64 + step).clamp(0, controls.num_frames() as i64 - 1);
-                controls.set_frame(frame.max(0) as usize);
+                controls.set_frame((controls.frame() as i64 + step).clamp(0, count - 1) as usize);
             }
         }
         if pressed(Key::D) && controls.num_discrete_frames() > 0 {
@@ -359,9 +370,21 @@ impl<V: Explorable> App<'_, V> {
     fn pointer(&mut self, ui: &egui::Ui, response: &egui::Response) {
         let ppp = ui.ctx().pixels_per_point();
         let height = response.rect.height() * ppp;
-        let controls = self.viewer.controls();
         let delta = response.drag_delta() * ppp;
         let shift = ui.input(|i| i.modifiers.shift);
+        let (scroll, zoom) = if response.hovered() {
+            ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()))
+        } else {
+            (0.0, 1.0)
+        };
+        let num_frames = self.viewer.controls().num_frames().max(1);
+        if scroll != 0.0 {
+            self.scroll -= scroll / SCROLL_PER_FRAME * self.scroll_gain(scroll, shift, num_frames);
+        }
+        let steps = self.scroll.trunc();
+        self.scroll -= steps;
+
+        let controls = self.viewer.controls();
         if response.dragged_by(PointerButton::Primary) && !shift {
             controls.orbit(delta.x, delta.y);
         } else if response.dragged_by(PointerButton::Secondary) || (response.dragged_by(PointerButton::Primary) && shift) {
@@ -370,19 +393,21 @@ impl<V: Explorable> App<'_, V> {
         if response.double_clicked() {
             controls.reset_camera();
         }
-        if response.hovered() {
-            let (scroll, zoom) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
-            if zoom != 1.0 {
-                controls.zoom(1.0 / zoom);
-            }
-            self.scroll -= scroll / SCROLL_PER_FRAME;
-            let steps = self.scroll.trunc();
-            if steps != 0.0 {
-                self.scroll -= steps;
-                let frame = (controls.frame() as i64 + steps as i64).clamp(0, controls.num_frames().max(1) as i64 - 1);
-                controls.set_frame(frame as usize);
-            }
+        if zoom != 1.0 {
+            controls.zoom(1.0 / zoom);
         }
+        if steps != 0.0 {
+            let frame = (controls.frame() as i64 + steps as i64).clamp(0, num_frames as i64 - 1);
+            controls.set_frame(frame as usize);
+        }
+    }
+
+    /// Frames per scrolled point, relative to SCROLL_PER_FRAME: more for long
+    /// trajectories and for fast scrolling; shift scrolls frame by frame.
+    fn scroll_gain(&mut self, scroll: f32, precise: bool, num_frames: usize) -> f32 {
+        let elapsed = self.last_scroll.elapsed().as_secs_f32();
+        self.last_scroll = Instant::now();
+        scroll_gain(scroll, elapsed, precise, num_frames)
     }
 
     fn panel(&mut self, ui: &mut egui::Ui) {
@@ -563,6 +588,17 @@ impl<V: Explorable> App<'_, V> {
     }
 }
 
+/// Frames per scrolled point relative to SCROLL_PER_FRAME, for `scroll` points
+/// `elapsed` seconds after the previous scroll event.
+fn scroll_gain(scroll: f32, elapsed: f32, precise: bool, num_frames: usize) -> f32 {
+    if precise {
+        return 1.0;
+    }
+    let length = (num_frames as f32 / SHORT_TRAJECTORY).max(1.0).sqrt();
+    let speed = scroll.abs() / elapsed.max(1.0 / 240.0);
+    length * (speed / SCROLL_SPEED).clamp(1.0, MAX_ACCELERATION)
+}
+
 fn choice(ui: &mut egui::Ui, label: &str, options: &[&str], current: &str, mut apply: impl FnMut(&str)) {
     ui.label(label);
     egui::ComboBox::from_id_salt(label).selected_text(current).show_ui(ui, |ui| {
@@ -651,5 +687,72 @@ impl<V: Explorable> ApplicationHandler for App<'_, V> {
         {
             target.window.request_redraw();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scrolling_accelerates() {
+        // slow scrolling on a short trajectory: SCROLL_PER_FRAME points per frame
+        assert_eq!(scroll_gain(5.0, 0.1, false, 50), 1.0);
+        // fast scrolling: up to MAX_ACCELERATION times more frames per point
+        assert_eq!(scroll_gain(40.0, 0.004, false, 50), MAX_ACCELERATION);
+        assert!((scroll_gain(40.0, 0.016, false, 50) - 6.25).abs() < 1e-4);
+        assert!((scroll_gain(8.0, 0.01, false, 50) - 2.0).abs() < 1e-4);
+        // long trajectories move faster, shift goes frame by frame
+        assert!((scroll_gain(5.0, 0.1, false, 3200) - 4.0).abs() < 1e-4);
+        assert_eq!(scroll_gain(40.0, 0.016, true, 3200), 1.0);
+    }
+
+    /// Run frames of a combo box made by `choice`, with simulated pointer events.
+    #[test]
+    fn choice_applies_the_clicked_option() {
+        let ctx = egui::Context::default();
+        let mut current = "uniform".to_string();
+        let mut option_rects: Vec<(String, egui::Rect)> = Vec::new();
+        let mut combo_rect = egui::Rect::NOTHING;
+        let mut frame = |events: Vec<egui::Event>, current: &mut String, option_rects: &mut Vec<(String, egui::Rect)>, combo_rect: &mut egui::Rect| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0))),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let selected = current.clone();
+                    ui.label("surface color");
+                    let response = egui::ComboBox::from_id_salt("surface color").selected_text(selected.as_str()).show_ui(ui, |ui| {
+                        for option in ["uniform", "atoms"] {
+                            let r = ui.selectable_label(option == selected, option);
+                            option_rects.push((option.to_string(), r.rect));
+                            if r.clicked() && option != selected {
+                                *current = option.to_string();
+                            }
+                        }
+                    });
+                    *combo_rect = response.response.rect;
+                });
+            });
+            output.textures_delta.clear();
+        };
+        let click = |pos: egui::Pos2| {
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Default::default() },
+                egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Default::default() },
+            ]
+        };
+        frame(vec![], &mut current, &mut option_rects, &mut combo_rect);
+        frame(click(combo_rect.center()), &mut current, &mut option_rects, &mut combo_rect);
+        for _ in 0..3 {
+            frame(vec![], &mut current, &mut option_rects, &mut combo_rect);
+        }
+        let atoms = option_rects.iter().rev().find(|(name, _)| name == "atoms").expect("the popup opened").1;
+        frame(click(atoms.center()), &mut current, &mut option_rects, &mut combo_rect);
+        frame(vec![], &mut current, &mut option_rects, &mut combo_rect);
+        assert_eq!(current, "atoms");
     }
 }

@@ -71,6 +71,8 @@ pub struct Structure {
     pub excluded: HashSet<(u32, u32)>,
     /// discrete states of the same atoms (frame-major), an alternative to scrub through
     pub discrete: Option<Vec<Vec3>>,
+    /// element colors per theme (light, dark), swapped in on a theme change
+    pub theme_colors: [Option<Vec<Rgba>>; 2],
 }
 
 impl Structure {
@@ -97,6 +99,7 @@ impl Structure {
             chains,
             excluded,
             discrete: None,
+            theme_colors: [None, None],
         }
     }
 

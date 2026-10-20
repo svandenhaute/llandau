@@ -90,6 +90,14 @@ fn rgba(color: &[f32]) -> PyResult<Rgba> {
     }
 }
 
+fn theme_index(name: &str) -> PyResult<usize> {
+    match name {
+        "light" => Ok(0),
+        "dark" => Ok(1),
+        _ => Err(value_error(format!("unknown theme {name:?}; light or dark"))),
+    }
+}
+
 struct Window {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
@@ -415,13 +423,30 @@ impl Viewer {
         self.changed();
     }
 
-    /// Replace the element colors (atoms, 3 or 4).
-    fn set_colors(&mut self, colors: PyReadonlyArrayDyn<f32>) -> PyResult<()> {
+    /// Set the element colors (atoms, 3 or 4). With `theme` ("light" or "dark")
+    /// they are that theme's, used whenever it is the theme; without, they are
+    /// used for every theme.
+    #[pyo3(signature = (colors, theme = None))]
+    fn set_colors(&mut self, colors: PyReadonlyArrayDyn<f32>, theme: Option<&str>) -> PyResult<()> {
         let colors = self::colors(&colors, "colors")?;
         if colors.len() != self.structure()?.num_atoms {
             return Err(value_error("colors: one per atom"));
         }
-        self.scene.structure.as_mut().unwrap().colors = colors;
+        let current = self.theme();
+        let structure = self.scene.structure.as_mut().unwrap();
+        match theme {
+            None => {
+                structure.theme_colors = [None, None];
+                structure.colors = colors;
+            }
+            Some(name) => {
+                let index = theme_index(name)?;
+                if name == current {
+                    structure.colors = colors.clone();
+                }
+                structure.theme_colors[index] = Some(colors);
+            }
+        }
         self.changed();
         Ok(())
     }
@@ -493,6 +518,12 @@ impl Viewer {
     #[setter]
     fn set_theme(&mut self, name: &str) -> PyResult<()> {
         self.scene.theme = Theme::named(name).ok_or_else(|| value_error(format!("unknown theme {name:?}")))?;
+        let index = theme_index(name)?;
+        if let Some(structure) = &mut self.scene.structure
+            && let Some(colors) = &structure.theme_colors[index]
+        {
+            structure.colors = colors.clone();
+        }
         self.changed();
         Ok(())
     }
