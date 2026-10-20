@@ -7,8 +7,8 @@ an explorer window, or render offscreen to numpy.
 Install a wheel from the GitHub releases (macOS and Linux, Python >= 3.10):
 
 ```
-pip install "molview[qt] @ https://github.com/svandenhaute/molview/releases/download/v0.1.0/<wheel for your platform>"
-gh release download v0.1.0 -R svandenhaute/molview -p "*manylinux*x86_64*" && pip install ./molview-*.whl "molview[qt]"
+pip install "molview[qt] @ https://github.com/svandenhaute/riemann_view/releases/download/v0.1.0/molview-0.1.0-cp310-abi3-manylinux_2_28_x86_64.whl"
+pip install "molview[qt] @ https://github.com/svandenhaute/riemann_view/releases/download/v0.1.0/molview-0.1.0-cp310-abi3-macosx_11_0_arm64.whl"
 ```
 
 or build it (needs Rust):
