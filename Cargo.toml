@@ -1,12 +1,12 @@
 [package]
-name = "molview"
-version = "0.1.0"
+name = "riemann_viewer"
+version = "0.2.0"
 edition = "2024"
 description = "Small wgpu viewer for atomic trajectories, embeddable in Qt (manim-slides) windows"
 license = "MIT"
 
 [lib]
-name = "molview"
+name = "riemann_viewer"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]

@@ -1,7 +1,7 @@
 """A window to explore a trajectory: the viewer plus a panel of controls and plots.
 
-    from molview import Viewer
-    from molview.explorer import explore
+    from riemann_viewer import Viewer
+    from riemann_viewer.explorer import explore
 
     viewer = Viewer().load(positions, numbers, roles=roles)
     viewer.add_vectors("tangent", tangents)
@@ -87,7 +87,7 @@ class Explorer(QWidget):
         t: np.ndarray | None = None,
         info: str | None = None,
         buttons: dict | None = None,
-        title: str = "molview",
+        title: str = "riemann_viewer",
     ):
         """`plots`: name -> values per frame, or name -> (xs, values) on the scale of `t`
         (the parameter of each frame; default the frame index). `info`: a line of

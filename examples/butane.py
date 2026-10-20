@@ -2,7 +2,7 @@
 import numpy as np
 from ase.build import molecule
 
-from molview import elements
+from riemann_viewer import elements
 
 
 def butane(num_frames=120):

@@ -2,8 +2,8 @@
 import numpy as np
 
 from butane import butane
-from molview import Viewer
-from molview.explorer import explore
+from riemann_viewer import Viewer
+from riemann_viewer.explorer import explore
 
 positions, numbers = butane()
 viewer = Viewer().load(positions, numbers)

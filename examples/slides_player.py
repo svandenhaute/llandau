@@ -17,7 +17,7 @@ from manim_slides.qt_utils import qapp
 from qtpy.QtCore import QPoint, QRect
 
 from butane import butane
-from molview.qt import ViewerWidget
+from riemann_viewer.qt import ViewerWidget
 
 REGION = (0.08, 0.2, 0.84, 0.75)  # left, top, width, height as fractions of the slide
 THEME = "dark"  # as the slides (present's DARK theme)

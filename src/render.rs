@@ -43,7 +43,7 @@ impl Gpu {
         // without a GPU: a software adapter (e.g. Mesa's lavapipe), if there is one
         let adapter = request(false).or_else(|_| request(true)).map_err(|e| format!("no GPU adapter: {e}"))?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("molview"),
+            label: Some("riemann_viewer"),
             ..Default::default()
         }))
         .map_err(|e| format!("no GPU device: {e}"))?;
@@ -187,7 +187,7 @@ impl Renderer {
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: globals.as_entire_binding() }],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("molview"),
+            label: Some("riemann_viewer"),
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });

@@ -9,7 +9,7 @@ Two ways to get the pictures on screen:
   raster  the viewer renders offscreen and the widget paints the image, like any
           Qt widget (works everywhere, e.g. Wayland; a copy per frame)
 The default is native on macOS and Windows and raster elsewhere; the environment
-variable MOLVIEW_QT=native|raster or the `mode` argument overrides it.
+variable RIEMANN_VIEWER_QT=native|raster or the `mode` argument overrides it.
 
 Mouse: left drag rotates, right drag (or shift + left) pans, wheel scrubs the
 trajectory, ctrl + wheel or a pinch zooms, double click resets the camera.
@@ -30,7 +30,7 @@ __all__ = ["ViewerWidget", "default_mode"]
 
 
 def default_mode() -> str:
-    mode = os.environ.get("MOLVIEW_QT")
+    mode = os.environ.get("RIEMANN_VIEWER_QT")
     if mode in ("native", "raster"):
         return mode
     return "native" if sys.platform in ("darwin", "win32") else "raster"

@@ -3,9 +3,9 @@ import sys
 
 import numpy as np
 
-import molview
-from molview import Viewer, pdb
-from molview.explorer import explore
+import riemann_viewer
+from riemann_viewer import Viewer, pdb
+from riemann_viewer.explorer import explore
 
 positions, numbers, roles = pdb.read(sys.argv[1])
 frames, atoms, _ = positions.shape
@@ -16,7 +16,7 @@ tangents = np.gradient(positions, axis=0)
 tangents /= np.linalg.norm(tangents.reshape(frames, -1), axis=1)[:, None, None]
 viewer.add_vectors("tangent", tangents * np.sqrt(atoms), scale=1.5, visible=False)
 t = np.linspace(0, 1, frames)
-viewer.set_trails(segment_ids=molview.segment_ids(t, np.linspace(0, 1, 7)))
+viewer.set_trails(segment_ids=riemann_viewer.segment_ids(t, np.linspace(0, 1, 7)))
 viewer.set_ghost(positions[-1])
 # every fifth model as "discrete" states: dots, and an alternative to scrub through
 discrete = positions[::5]

@@ -397,19 +397,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "molview"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "glam",
- "numpy",
- "pollster",
- "pyo3",
- "raw-window-handle",
- "wgpu",
-]
-
-[[package]]
 name = "naga"
 version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -803,6 +790,19 @@ name = "renderdoc-sys"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
+
+[[package]]
+name = "riemann_viewer"
+version = "0.2.0"
+dependencies = [
+ "bytemuck",
+ "glam",
+ "numpy",
+ "pollster",
+ "pyo3",
+ "raw-window-handle",
+ "wgpu",
+]
 
 [[package]]
 name = "rustc-hash"

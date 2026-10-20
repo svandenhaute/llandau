@@ -6,7 +6,7 @@ import os
 import numpy as np
 import pytest
 
-from molview import Viewer
+from riemann_viewer import Viewer
 
 # water, stretching one O-H bond over 5 frames
 START = np.array([[0.0, 0.0, 0.0], [0.96, 0.0, 0.0], [-0.24, 0.93, 0.0]])
@@ -75,7 +75,7 @@ def test_qt_raster_widget(viewer):
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from qtpy.QtWidgets import QApplication
 
-    from molview.qt import ViewerWidget
+    from riemann_viewer.qt import ViewerWidget
 
     app = QApplication.instance() or QApplication([])
     widget = ViewerWidget(viewer=viewer, mode="raster")

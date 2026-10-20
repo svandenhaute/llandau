@@ -1,4 +1,4 @@
-//! molview: a small viewer for atomic trajectories that draws into a native
+//! riemann_viewer: a small viewer for atomic trajectories that draws into a native
 //! window handle (e.g. a Qt widget over the manim-slides player) or offscreen.
 
 pub mod camera;
@@ -154,7 +154,7 @@ impl Viewer {
 
 #[pymethods]
 impl Viewer {
-    /// Arguments are for subclasses' __init__ (e.g. molview.Viewer's theme).
+    /// Arguments are for subclasses' __init__ (e.g. riemann_viewer.Viewer's theme).
     #[new]
     #[pyo3(signature = (*_args, **_kwargs))]
     fn new(_args: &Bound<'_, pyo3::types::PyTuple>, _kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
