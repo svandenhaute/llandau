@@ -3,8 +3,8 @@ requires = ["maturin>=1.7,<2"]
 build-backend = "maturin"
 
 [project]
-name = "landau"
-version = "0.2.0"
+name = "landau-visuals"
+version = "0.2.1"
 description = "Smooth scientific slides drawn live, with interactive 3D views of atomic trajectories"
 requires-python = ">=3.10"
 license = "MIT"
