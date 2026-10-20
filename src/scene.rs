@@ -127,10 +127,20 @@ pub enum Sidechains {
 }
 
 pub struct VectorField {
-    /// frames * atoms, or atoms (the same every frame)
+    /// frames * atoms, or atoms (the same every frame); or one per origin
     pub vectors: Vec<Vec3>,
+    /// fixed arrow origins; None: from the atoms of the current frame
+    pub origins: Option<Vec<Vec3>>,
     pub color: Option<Rgba>,
     pub scale: f32,
+    pub visible: bool,
+}
+
+/// Fixed spheres, e.g. the frames of a discrete trajectory as dots.
+pub struct Points {
+    pub positions: Vec<Vec3>,
+    pub colors: Vec<Rgba>,
+    pub radius: f32,
     pub visible: bool,
 }
 
@@ -170,6 +180,7 @@ pub struct Scene {
     pub arrow_radius: f32,
     pub trails: Trails,
     pub vectors: BTreeMap<String, VectorField>,
+    pub points: BTreeMap<String, Points>,
     pub colorings: BTreeMap<String, Coloring>,
     /// name of the coloring in use; None: element colors
     pub coloring: Option<String>,
@@ -205,6 +216,7 @@ impl Default for Scene {
             arrow_radius: 0.05,
             trails: Trails { visible: true, colors: None, segment_ids: None, opacity: 1.0, radius: 0.02 },
             vectors: BTreeMap::new(),
+            points: BTreeMap::new(),
             colorings: BTreeMap::new(),
             coloring: None,
             ghost: None,
@@ -288,11 +300,27 @@ impl Scene {
 
         let marked = self.marked_atoms(s, false);
         for field in self.vectors.values().filter(|f| f.visible) {
-            let vectors = per_frame(&field.vectors, s.num_atoms, frame);
             let color = field.color.unwrap_or(self.theme.vector);
-            for &a in &marked {
-                self.arrow(positions[a], field.scale * vectors[a], color, &mut out);
+            match &field.origins {
+                Some(origins) => {
+                    for (origin, vector) in origins.iter().zip(&field.vectors) {
+                        self.arrow(*origin, field.scale * *vector, color, &mut out);
+                    }
+                }
+                None => {
+                    let vectors = per_frame(&field.vectors, s.num_atoms, frame);
+                    for &a in &marked {
+                        self.arrow(positions[a], field.scale * vectors[a], color, &mut out);
+                    }
+                }
             }
+        }
+        for points in self.points.values().filter(|p| p.visible) {
+            out.spheres.extend(points.positions.iter().zip(&points.colors).map(|(p, c)| SphereInstance {
+                center: p.to_array(),
+                radius: points.radius,
+                color: *c,
+            }));
         }
         out
     }

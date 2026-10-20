@@ -80,9 +80,18 @@ class Plot(QWidget):
 
 
 class Explorer(QWidget):
-    def __init__(self, viewer, plots: dict | None = None, t: np.ndarray | None = None, title: str = "molview"):
+    def __init__(
+        self,
+        viewer,
+        plots: dict | None = None,
+        t: np.ndarray | None = None,
+        info: str | None = None,
+        buttons: dict | None = None,
+        title: str = "molview",
+    ):
         """`plots`: name -> values per frame, or name -> (xs, values) on the scale of `t`
-        (the parameter of each frame; default the frame index)."""
+        (the parameter of each frame; default the frame index). `info`: a line of
+        text. `buttons`: label -> function of the viewer returning text to copy."""
         super().__init__()
         self.setWindowTitle(title)
         self.view = ViewerWidget(viewer=viewer)
@@ -93,6 +102,8 @@ class Explorer(QWidget):
 
         panel = QWidget()
         layout = QVBoxLayout(panel)
+        if info:
+            layout.addWidget(QLabel(info))
         form = QFormLayout()
         layout.addLayout(form)
 
@@ -134,7 +145,7 @@ class Explorer(QWidget):
             )
 
         # layers
-        for layer in ["atoms", "trails", "ghost", "clashes", *viewer.vector_names]:
+        for layer in ["atoms", "trails", "ghost", "clashes", *viewer.vector_names, *viewer.point_names]:
             try:
                 checked = viewer.is_visible(layer)
             except KeyError:
@@ -155,9 +166,11 @@ class Explorer(QWidget):
             self._slider(sizes, f"{name} length", scale, 0.0, 4.0 * scale,
                          lambda v, name=name: viewer.set_vector_scale(name, v))
 
-        copy = QPushButton("copy camera")
-        copy.clicked.connect(self.copy_camera)
-        layout.addWidget(copy)
+        buttons = {"copy camera": camera_json, **(buttons or {})}
+        for label, text in buttons.items():
+            button = QPushButton(label)
+            button.clicked.connect(lambda _=False, text=text: self.copy(text(viewer)))
+            layout.addWidget(button)
 
         self.plots = []
         for name, values in (plots or {}).items():
@@ -191,11 +204,14 @@ class Explorer(QWidget):
             plot.set_x(float(self.t[min(frame, len(self.t) - 1)]))
         self.view.request_render()
 
-    def copy_camera(self):
-        text = json.dumps({k: (list(v) if isinstance(v, (list, tuple)) else round(v, 3))
-                           for k, v in self.viewer.camera.items()})
+    @staticmethod
+    def copy(text: str):
         QApplication.clipboard().setText(text)
         print(text, flush=True)
+
+
+def camera_json(viewer) -> str:
+    return json.dumps({k: (list(v) if isinstance(v, (list, tuple)) else round(v, 3)) for k, v in viewer.camera.items()})
 
 
 def explore(viewer, **kwargs):

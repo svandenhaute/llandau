@@ -79,6 +79,12 @@ class Viewer(_Viewer):
     def add_vectors(self, name, vectors, color=None, scale=1.0, visible=True):
         super().add_vectors(name, _f32(vectors), color, scale, visible)
 
+    def add_arrows(self, name, origins, vectors, color=None, scale=1.0, visible=True):
+        super().add_arrows(name, _f32(origins), _f32(vectors), color, scale, visible)
+
+    def add_points(self, name, positions, colors=None, color=None, radius=0.05, visible=True):
+        super().add_points(name, _f32(positions), _f32(colors), color, radius, visible)
+
     def add_coloring(self, name, colors):
         super().add_coloring(name, _f32(colors))
 

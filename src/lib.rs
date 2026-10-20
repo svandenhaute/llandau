@@ -20,7 +20,7 @@ use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
 use camera::Camera;
 use render::{Gpu, Renderer};
-use scene::{Coloring, Ghost, Scene, Sidechains, Structure, Style, VectorField};
+use scene::{Coloring, Ghost, Points, Scene, Sidechains, Structure, Style, VectorField};
 use theme::{Rgba, Theme};
 
 fn runtime_error(message: impl std::fmt::Display) -> PyErr {
@@ -152,8 +152,10 @@ impl Viewer {
 
 #[pymethods]
 impl Viewer {
+    /// Arguments are for subclasses' __init__ (e.g. molview.Viewer's theme).
     #[new]
-    fn new() -> PyResult<Self> {
+    #[pyo3(signature = (*_args, **_kwargs))]
+    fn new(_args: &Bound<'_, pyo3::types::PyTuple>, _kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
         let gpu = Gpu::new().map_err(runtime_error)?;
         let renderer = Renderer::new(&gpu.device);
         Ok(Self {
@@ -304,6 +306,7 @@ impl Viewer {
         self.frame = self.frame.min(structure.num_frames().saturating_sub(1));
         self.scene.structure = Some(structure);
         self.scene.vectors.clear();
+        self.scene.points.clear();
         self.scene.colorings.clear();
         self.scene.coloring = None;
         self.scene.ghost = None;
@@ -471,7 +474,8 @@ impl Viewer {
         Ok(())
     }
 
-    /// Visibility of a layer: "atoms", "trails", "ghost", "clashes", or a vector field name.
+    /// Visibility of a layer: "atoms", "trails", "ghost", "clashes", or the name of
+    /// a vector field or a point set.
     fn set_visible(&mut self, layer: &str, visible: bool) -> PyResult<()> {
         let s = &mut self.scene;
         match layer {
@@ -482,9 +486,10 @@ impl Viewer {
                 Some(ghost) => ghost.visible = visible,
                 None => return Err(PyKeyError::new_err("no ghost")),
             },
-            name => match s.vectors.get_mut(name) {
-                Some(field) => field.visible = visible,
-                None => return Err(PyKeyError::new_err(name.to_string())),
+            name => match (s.vectors.get_mut(name), s.points.get_mut(name)) {
+                (Some(field), _) => field.visible = visible,
+                (None, Some(points)) => points.visible = visible,
+                (None, None) => return Err(PyKeyError::new_err(name.to_string())),
             },
         }
         self.changed();
@@ -498,7 +503,11 @@ impl Viewer {
             "trails" => s.trails.visible,
             "clashes" => s.show_clashes,
             "ghost" => s.ghost.as_ref().is_some_and(|g| g.visible),
-            name => s.vectors.get(name).ok_or_else(|| PyKeyError::new_err(name.to_string()))?.visible,
+            name => match (s.vectors.get(name), s.points.get(name)) {
+                (Some(field), _) => field.visible,
+                (None, Some(points)) => points.visible,
+                (None, None) => return Err(PyKeyError::new_err(name.to_string())),
+            },
         })
     }
 
@@ -543,9 +552,60 @@ impl Viewer {
         let vectors = points(&vectors, &name)?;
         self.check_per_atom(vectors.len(), &name)?;
         let color = color.as_deref().map(rgba).transpose()?;
-        self.scene.vectors.insert(name, VectorField { vectors, color, scale, visible });
+        self.scene.vectors.insert(name, VectorField { vectors, origins: None, color, scale, visible });
         self.changed();
         Ok(())
+    }
+
+    /// Arrows that do not move with the frames: from `origins` (arrows, 3) along
+    /// `vectors` (arrows, 3), times `scale`.
+    #[pyo3(signature = (name, origins, vectors, color = None, scale = 1.0, visible = true))]
+    fn add_arrows(
+        &mut self,
+        name: String,
+        origins: PyReadonlyArrayDyn<f32>,
+        vectors: PyReadonlyArrayDyn<f32>,
+        color: Option<Vec<f32>>,
+        scale: f32,
+        visible: bool,
+    ) -> PyResult<()> {
+        let (origins, vectors) = (points(&origins, "origins")?, points(&vectors, &name)?);
+        if origins.len() != vectors.len() {
+            return Err(value_error(format!("{name}: {} origins for {} vectors", origins.len(), vectors.len())));
+        }
+        let color = color.as_deref().map(rgba).transpose()?;
+        self.scene.vectors.insert(name, VectorField { vectors, origins: Some(origins), color, scale, visible });
+        self.changed();
+        Ok(())
+    }
+
+    /// Fixed spheres at `positions` (points, 3), with `colors` (points, 3|4) or one `color`.
+    #[pyo3(signature = (name, positions, colors = None, color = None, radius = 0.05, visible = true))]
+    fn add_points(
+        &mut self,
+        name: String,
+        positions: PyReadonlyArrayDyn<f32>,
+        colors: Option<PyReadonlyArrayDyn<f32>>,
+        color: Option<Vec<f32>>,
+        radius: f32,
+        visible: bool,
+    ) -> PyResult<()> {
+        let positions = points(&positions, &name)?;
+        let colors = match (colors, color) {
+            (Some(colors), _) => self::colors(&colors, &name)?,
+            (None, color) => vec![color.as_deref().map(rgba).transpose()?.unwrap_or(self.scene.theme.vector); positions.len()],
+        };
+        if colors.len() != positions.len() {
+            return Err(value_error(format!("{name}: {} colors for {} points", colors.len(), positions.len())));
+        }
+        self.scene.points.insert(name, Points { positions, colors, radius, visible });
+        self.changed();
+        Ok(())
+    }
+
+    #[getter]
+    fn point_names(&self) -> Vec<String> {
+        self.scene.points.keys().cloned().collect()
     }
 
     fn set_vector_scale(&mut self, name: &str, scale: f32) -> PyResult<()> {
