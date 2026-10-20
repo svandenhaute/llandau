@@ -1,4 +1,4 @@
-"""Deck: a manim-slides Slide with theme, slide numbers and short reveal helpers.
+"""Deck: a slide (a Scene with steps) with theme, slide numbers and short reveal helpers.
 
     class Results(Deck):
         theme = LIGHT
@@ -11,8 +11,9 @@
 """
 from __future__ import annotations
 
-from manim import AddTextLetterByLetter, Write, Text, Group, LaggedStart, DR, ImageMobject, config
-from manim_slides import Slide
+from .animation import AddTextLetterByLetter, Write, LaggedStart
+from .mobject import Group, DR, ImageMobject, config
+from .scene import Scene
 
 from .theme import DARK, LABEL, use
 from .layout import R, Region, place
@@ -24,11 +25,11 @@ __all__ = ["Deck", "order", "typewrite"]
 
 
 def typewrite(mob, **kwargs):
-    """Letter-by-letter for Pango text, Write for anything else (e.g. Typst text)."""
-    return AddTextLetterByLetter(mob, **kwargs) if isinstance(mob, Text) else Write(mob, **kwargs)
+    """Letter by letter for plain text (text() without math), Write for anything else."""
+    return AddTextLetterByLetter(mob, **kwargs) if getattr(mob, "plain_text", False) else Write(mob, **kwargs)
 
 
-class Deck(Slide):
+class Deck(Scene):
     theme = DARK
     numbered = True           # False: no number shown and not counted (title slide, full-screen photos)
     number: int | None = None  # assigned by order()

@@ -1,4 +1,4 @@
-"""Text in Linux Biolinum; anything containing math is typeset with Typst.
+"""Text in Linux Biolinum, all of it typeset with Typst (math too).
 
     text("plain"), bold("strong"), italic("aside")
     text("cost $tilde N^3$")          # contains $ -> the whole string is Typst markup
@@ -11,18 +11,16 @@ import subprocess
 from functools import cache, partial
 from pathlib import Path
 
-from manim import config, Text, SVGMobject, ManimColor, NORMAL, BOLD, ITALIC, LEFT
+from .mobject import SVGMobject, ManimColor, LEFT
 
 from . import theme
 from .theme import FONT, TITLE, BODY
 from .layout import R, place, stack, S
 from .media import CACHE_DIR
 
-__all__ = ["text", "bold", "italic", "eq", "typst", "title", "bullets"]
+__all__ = ["text", "bold", "italic", "eq", "typst", "title", "bullets", "NORMAL", "BOLD", "ITALIC"]
 
-# Pango lays out glyphs at the requested pixel size; at small sizes hinting/rounding can
-# ruin the letter spacing. Render large and scale down instead.
-OVERSAMPLE = 10
+NORMAL, BOLD, ITALIC = "NORMAL", "BOLD", "ITALIC"
 
 # first one installed wins; Libertinus Math matches Libertine/Biolinum
 MATH_FONTS = ("Libertinus Math", "New Computer Modern Math")
@@ -36,24 +34,23 @@ _MATH = re.compile(r"(?<!\\)\$")
 
 def text(s: str, size: float = BODY, color=None, weight=NORMAL, slant=NORMAL,
          typst_markup: bool | None = None, **kwargs):
-    """Single text object. Contains unescaped $...$ -> the string is Typst markup (so *, _, #, ~
-    have their Typst meaning there; force either way with typst_markup=). A literal dollar is \\$."""
+    """Single text object, typeset with Typst. Contains unescaped $...$ -> the string is Typst
+    markup (so *, _, #, ~ have their Typst meaning there; force either way with typst_markup=).
+    A literal dollar is \\$. Lines break only at explicit newlines."""
     if typst_markup is None:
         typst_markup = bool(_MATH.search(s))
     if typst_markup:
         return typst(s, size=size, color=color, weight=weight, slant=slant, **kwargs)
-    # Manim uses config.pixel_width as Pango's layout width, so long lines would wrap, and wrap
-    # differently per render quality. Lift it: lines only break at explicit \n.
-    pixel_width = config.pixel_width
-    config.pixel_width = 100_000
-    try:
-        mob = Text(
-            s.replace(r"\$", "$"), font=FONT, font_size=OVERSAMPLE * size,
-            weight=weight, slant=slant, color=color or theme.current().fg, **kwargs,
-        )
-    finally:
-        config.pixel_width = pixel_width
-    return mob.scale(1 / OVERSAMPLE)
+    # each line as a Typst string, so nothing in it is markup; joined by line breaks
+    source = " \\\n".join(_typst_string(line) for line in s.replace(r"\$", "$").split("\n"))
+    mob = typst(source, size=size, color=color, weight=weight, slant=slant, **kwargs)
+    mob.plain_text = True
+    return mob
+
+
+def _typst_string(line: str) -> str:
+    escaped = line.replace("\\", "\\\\").replace('"', '\\"')
+    return f'#"{escaped}"'
 
 
 bold = partial(text, weight=BOLD)

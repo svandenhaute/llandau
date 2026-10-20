@@ -1,7 +1,7 @@
 """Colours, font and type scale. Change these in one place for the whole deck."""
 from dataclasses import dataclass
 
-from manim import BLACK, WHITE, GRAY, DARK_GRAY, ManimColor
+from .mobject import BLACK, WHITE, GRAY, DARK_GRAY, ManimColor
 
 __all__ = [
     "Theme", "DARK", "LIGHT", "use", "current",

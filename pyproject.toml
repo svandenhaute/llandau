@@ -5,17 +5,18 @@ build-backend = "hatchling.build"
 [project]
 name = "present"
 version = "0.1.0"
-description = "Less verbose scientific slide decks with manim + manim-slides"
+description = "Minimal scientific slide decks, drawn live (no videos)"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "manim>=0.19",
-    "manim-slides>=5.5",
+    "numpy",
+    "riemann_viewer>=0.4",  # draws and presents the decks (wheels on its GitHub releases)
 ]
 
 [project.optional-dependencies]
 cairosvg = ["cairosvg"]  # fallback SVG rasterizer when neither rsvg-convert nor inkscape is installed
-live = ["riemann_viewer", "qtpy"]  # `present live`: interactive 3D steps (riemann_viewer: wheels on its GitHub releases)
+export = ["pillow"]  # present pdf / png
+test = ["pytest", "pillow"]
 
 [project.scripts]
 present = "present.render:main"

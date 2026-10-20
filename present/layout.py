@@ -10,10 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from manim import (
-    config, Mobject, VMobject, Group, VGroup, Rectangle, DashedVMobject,
-    ORIGIN, LEFT, RIGHT, UP, DOWN, RED,
-)
+from .mobject import config, Mobject, VMobject, Group, VGroup, ORIGIN, LEFT, RIGHT, UP, DOWN, RED
+from .shapes import Rectangle, DashedVMobject
 
 __all__ = [
     "Region", "R", "place", "region_of",

@@ -1,16 +1,16 @@
-"""Render a deck and convert it, using the SLIDES list from the scene file.
+"""Present a deck, or export it, using the SLIDES list from the scene file.
+Nothing is rendered ahead: the deck is drawn live, animations included.
 
-    present render scene.py                    # render all, write scene.html
-    present render scene.py --only Masses QM   # render a few (no conversion)
-    present render scene.py --present          # render all, then present
-    present render scene.py -q l -- --disable_caching   # after --: passed to manim
-    present live scene.py                      # present with live 3D steps (see present.live)
+    present play slides.py                  # present (F: full screen, arrows: steps)
+    present play slides.py --only Masses QM # a few slides
+    present play slides.py --start 12       # from step 12
+    present pdf slides.py                   # one page per step: slides.pdf
+    present png slides.py OUT_DIR           # one PNG per step
 """
 import argparse
 import ast
 import collections
 import runpy
-import subprocess
 import sys
 from pathlib import Path
 
@@ -22,78 +22,61 @@ def duplicate_classes(path: Path) -> list[str]:
     return [name for name, count in collections.Counter(names).items() if count > 1]
 
 
-def slide_names(path: Path) -> list[str]:
+def load_slides(path: Path, only=None) -> list:
     sys.path.insert(0, str(path.parent.resolve()))
     module = runpy.run_path(str(path))
     if "SLIDES" not in module:
         sys.exit(f"{path} defines no SLIDES list (use SLIDES = order(...))")
-    return [cls if isinstance(cls, str) else cls.__name__ for cls in module["SLIDES"]]
+    slides = [module[s] if isinstance(s, str) else s for s in module["SLIDES"]]
+    if only:
+        slides = [s for s in slides if s.__name__ in only]
+        missing = set(only) - {s.__name__ for s in slides}
+        if missing:
+            sys.exit(f"not in SLIDES: {', '.join(sorted(missing))}")
+    return slides
 
 
-# reveal.js only pauses a step's background video when leaving it, so on a later visit the video
-# still shows its last frame until the restart (currentTime = 0) has finished seeking: the
-# finished animation flashes before it plays again. Rewind on leaving instead.
-REWIND_ON_LEAVE = """
-<script data-present="rewind-on-leave">
-Reveal.on("slidechanged", (event) => {
-  const video = event.previousSlide && Reveal.getSlideBackground(event.previousSlide)?.querySelector("video");
-  if (video) { video.pause(); video.currentTime = 0; }
-});
-</script>
-"""
-
-
-def inject(html: Path, script: str) -> None:
-    source = html.read_text()
-    if script.strip() not in source:
-        i = source.rindex("</body>")
-        html.write_text(source[:i] + script + source[i:])
-
-
-def run(cmd: list[str]) -> None:
-    print("+", " ".join(cmd), flush=True)
-    subprocess.run(cmd, check=True)
+def stills(deck, size=(1920, 1080)):
+    """The end of every step, as RGBA images."""
+    for time, _, _ in deck.marks:
+        yield deck.render(time - 1e-6, *size)
 
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
-    extra = []
-    if "--" in argv:
-        i = argv.index("--")
-        argv, extra = argv[:i], argv[i + 1:]
-
-    if argv[:1] == ["live"]:
-        from .live import main as live
-        sys.exit(live(argv[1:]))
-    if argv[:1] != ["render"]:
-        sys.exit("usage: present render|live SLIDES.py [options]   (present render --help)")
-    argv = argv[1:]
-    parser = argparse.ArgumentParser(prog="present render", description=__doc__,
+    parser = argparse.ArgumentParser(prog="present", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("command", choices=["play", "pdf", "png", "live", "render"])
     parser.add_argument("file", type=Path)
-    parser.add_argument("--only", nargs="+", metavar="SLIDE", help="render only these slides")
-    parser.add_argument("-q", "--quality", default="h", choices=list("lmhpk"),
-                        help="manim quality: l=480p15 m=720p30 h=1080p60 (default) p=1440p60 k=4k60")
-    parser.add_argument("--html", type=Path, help="output file (default: <file>.html)")
-    parser.add_argument("--present", action="store_true", help="present instead of converting")
-    parser.add_argument("--no-render", action="store_true", help="only convert/present")
+    parser.add_argument("out", type=Path, nargs="?", help="pdf: output file; png: output folder")
+    parser.add_argument("--only", nargs="+", metavar="SLIDE", help="only these slides")
+    parser.add_argument("--start", type=int, default=0, help="play: the step to start at")
+    parser.add_argument("--fullscreen", "-f", action="store_true", help="play: start in full screen")
+    parser.add_argument("--size", type=int, nargs=2, default=(1920, 1080), metavar=("W", "H"),
+                        help="pdf, png: pixels per page")
     args = parser.parse_args(argv)
 
     dups = duplicate_classes(args.file)
     if dups:
         sys.exit(f"classes defined more than once in {args.file}: {', '.join(dups)}")
+    from .scene import build
+    deck = build(load_slides(args.file, args.only))
 
-    slides = slide_names(args.file)
-    targets = args.only or slides
-    if not args.no_render:
-        run(["manim", "render", f"-q{args.quality}", *extra, str(args.file), *dict.fromkeys(targets)])
-
-    if args.present:
-        run(["manim-slides", "present", *targets])
-    elif args.only is None or args.html is not None:
-        html = args.html or args.file.with_suffix(".html")
-        run(["manim-slides", "convert", "--to", "html", *targets, str(html)])
-        inject(html, REWIND_ON_LEAVE)
+    if args.command in ("play", "live"):
+        deck.play(start=args.start, fullscreen=args.fullscreen, title=args.file.stem)
+    elif args.command in ("pdf", "render"):
+        from PIL import Image
+        out = args.out or args.file.with_suffix(".pdf")
+        pages = [Image.fromarray(image).convert("RGB") for image in stills(deck, tuple(args.size))]
+        pages[0].save(out, save_all=True, append_images=pages[1:], resolution=args.size[1] / 7.5)
+        print(f"{out}: {len(pages)} pages")
+    elif args.command == "png":
+        from PIL import Image
+        out = args.out or args.file.with_suffix("")
+        out.mkdir(parents=True, exist_ok=True)
+        for k, image in enumerate(stills(deck, tuple(args.size))):
+            Image.fromarray(image).save(out / f"{k:03d}.png")
+        print(f"{out}/: {len(deck.marks)} images")
 
 
 if __name__ == "__main__":

@@ -20,7 +20,8 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
-from manim import ImageMobject, SVGMobject, Group, VGroup, Rectangle
+from .mobject import ImageMobject, SVGMobject, Group, VGroup
+from .shapes import Rectangle
 
 from .layout import Region, place
 
