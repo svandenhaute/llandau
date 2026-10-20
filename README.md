@@ -20,6 +20,9 @@ class Results(Deck):
 SLIDES = order(Results)
 ```
 
+The figures above are placeholders; [examples/slides.py](examples/slides.py) is the same deck with
+plots drawn from numpy, runnable as is.
+
 ```
 landau play slides.py              # present: arrows step, F full screen, the wheel scrubs
 landau play slides.py --only Results --start 3
