@@ -16,7 +16,7 @@
 
 A view (the keywords of Deck.live) sets, when its step starts: camera (a dict as
 viewer.camera; the camera moves there smoothly), frame, style, sidechains,
-shading, coloring, scrub_discrete, and show / hide (layer names). Consecutive
+shading, fog, coloring, scrub_discrete, and show / hide (layer names). Consecutive
 steps of the same scene keep everything else, including where the presenter
 turned it.
 
@@ -31,7 +31,7 @@ from __future__ import annotations
 __all__ = ["live_scene", "VIEW_KEYS"]
 
 SCENES = {}
-VIEW_KEYS = {"camera", "frame", "style", "sidechains", "shading", "coloring", "scrub_discrete", "show", "hide"}
+VIEW_KEYS = {"camera", "frame", "style", "sidechains", "shading", "fog", "coloring", "scrub_discrete", "show", "hide"}
 
 
 def live_scene(name: str):
@@ -51,7 +51,7 @@ def build(viewer, scene: str):
 
 def apply_view(viewer, view: dict, camera: bool = True):
     """Apply a view's settings; the camera only with `camera` (else it is animated by the caller)."""
-    for key in ("style", "sidechains", "shading"):
+    for key in ("style", "sidechains", "shading", "fog"):
         if key in view:
             setattr(viewer, key, view[key])
     if "coloring" in view:

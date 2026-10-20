@@ -7,9 +7,13 @@ struct Globals {
     proj: mat4x4<f32>,
     viewport: vec4<f32>,
     light: vec4<f32>,
-    // x: 1 for flat shading; y: outline width in angstrom, z: at least this many pixels
+    // x: 1 for flat shading; y: outline width in angstrom, z: at least this many pixels;
+    // w: halo width in angstrom
     shading: vec4<f32>,
     outline: vec4<f32>,
+    background: vec4<f32>,
+    // x, y: view depths of the nearest and farthest atom; z: fog; w: halo depth in angstrom
+    cue: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> g: Globals;
 
@@ -79,9 +83,10 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
         let across = sqrt(max(1.0 - pow(dot(normal, to_eye), 2.0), 0.0));
         let pixel_size = 2.0 * -in.position.z / (g.proj[1][1] * g.viewport.y);
         let pixels = (1.0 - across) * in.radius / pixel_size;
-        return vec4(mix(linear(color.rgb), linear(g.outline.rgb), outline(pixels, in.position.z)), color.a);
+        let flat = mix(linear(color.rgb), linear(g.outline.rgb), outline(pixels, in.position.z));
+        return vec4(fog(flat, in.position.z), color.a);
     }
-    return vec4(shade(linear(color.rgb), normal, to_eye), color.a);
+    return vec4(fog(shade(linear(color.rgb), normal, to_eye), in.position.z), color.a);
 }
 
 fn shade(color: vec3<f32>, normal: vec3<f32>, to_eye: vec3<f32>) -> vec3<f32> {
@@ -101,7 +106,25 @@ fn linear(c: vec3<f32>) -> vec3<f32> {
 // How much of the outline color a fragment `pixels` from the silhouette takes,
 // at view depth `z`.
 fn outline(pixels: f32, z: f32) -> f32 {
-    let pixel_size = 2.0 * -z / (g.proj[1][1] * g.viewport.y);
-    let width = max(g.shading.y / pixel_size, g.shading.z);
-    return OUTLINES * clamp(width - pixels + 0.5, 0.0, 1.0);
+    return OUTLINES * clamp(outline_width(z) - pixels + 0.5, 0.0, 1.0);
+}
+
+// Outline width in pixels at view depth z: wider in front, thinner at the back.
+fn outline_width(z: f32) -> f32 {
+    return max(g.shading.y / pixel_size(z), g.shading.z) * mix(1.25, 0.75, depth(z));
+}
+
+// The size of a pixel at view depth z, in angstrom.
+fn pixel_size(z: f32) -> f32 {
+    return 2.0 * -z / (g.proj[1][1] * g.viewport.y);
+}
+
+// 0 at the nearest atom, 1 at the farthest.
+fn depth(z: f32) -> f32 {
+    return clamp((-z - g.cue.x) / max(g.cue.y - g.cue.x, 1e-3), 0.0, 1.0);
+}
+
+// Depth cueing: farther away, closer to the background.
+fn fog(color: vec3<f32>, z: f32) -> vec3<f32> {
+    return mix(color, g.background.rgb, g.cue.z * depth(z));
 }

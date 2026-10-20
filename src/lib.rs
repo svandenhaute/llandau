@@ -548,8 +548,20 @@ impl Viewer {
         self.renderer.color_gamma = gamma.max(0.1);
     }
 
+    /// Depth cueing: how far the farthest atoms fade towards the background
+    /// (0: none, 1: all the way).
+    #[getter]
+    fn fog(&self) -> f32 {
+        self.renderer.fog
+    }
+
+    #[setter]
+    fn set_fog(&mut self, fog: f32) {
+        self.renderer.fog = fog.clamp(0.0, 1.0);
+    }
+
     /// "lit" (lighting and highlights) or "flat" (plain colors with a dark
-    /// outline, as cinemol draws them).
+    /// outline, as cinemol draws them; atoms in front of others far behind get a halo).
     #[getter]
     fn shading(&self) -> &'static str {
         if self.renderer.flat { "flat" } else { "lit" }
@@ -1089,6 +1101,12 @@ impl window::Controls for Viewer {
     }
     fn set_color_gamma(&mut self, gamma: f32) {
         Viewer::set_color_gamma(self, gamma)
+    }
+    fn fog(&self) -> f32 {
+        self.renderer.fog
+    }
+    fn set_fog(&mut self, fog: f32) {
+        Viewer::set_fog(self, fog)
     }
     fn radius_scale(&self) -> f32 {
         self.scene.radius_scale

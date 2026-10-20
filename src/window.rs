@@ -87,6 +87,8 @@ pub trait Controls {
     fn set_visible(&mut self, layer: &str, visible: bool);
     fn color_gamma(&self) -> f32;
     fn set_color_gamma(&mut self, gamma: f32);
+    fn fog(&self) -> f32;
+    fn set_fog(&mut self, fog: f32);
     fn radius_scale(&self) -> f32;
     fn set_radius_scale(&mut self, scale: f32);
     fn surface_opacity(&self) -> f32;
@@ -489,6 +491,12 @@ impl<V: Explorable> App<'_, V> {
             ui.label("color depth");
             if ui.add(egui::Slider::new(&mut gamma, 1.0..=2.4)).changed() {
                 controls.set_color_gamma(gamma);
+            }
+            ui.end_row();
+            let mut fog = controls.fog();
+            ui.label("fog");
+            if ui.add(egui::Slider::new(&mut fog, 0.0..=1.0)).changed() {
+                controls.set_fog(fog);
             }
             ui.end_row();
             let mut radius = controls.radius_scale();

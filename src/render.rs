@@ -21,6 +21,13 @@ pub const DEFAULT_COLOR_GAMMA: f32 = 1.6;
 /// Outline in flat shading: this many angstrom wide, but at least this many pixels.
 const OUTLINE_WIDTH: f32 = 0.04;
 const OUTLINE_MIN_PIXELS: f32 = 1.2;
+/// Halo in flat shading: a ring of outline color around each atom, this many angstrom wide,
+/// drawn this far behind the atom's back. Atoms close behind (bonded neighbors) cover it;
+/// atoms far behind show it: a bolder line at depth gaps.
+const HALO_WIDTH: f32 = 0.025;
+const HALO_DEPTH: f32 = 0.5;
+/// How far towards the background the farthest atoms fade by default.
+pub const DEFAULT_FOG: f32 = 0.45;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 #[derive(Clone)]
@@ -73,6 +80,9 @@ struct Globals {
     light: [f32; 4],
     shading: [f32; 4],
     outline: [f32; 4],
+    background: [f32; 4],
+    // x, y: view depths of the nearest and farthest atom; z: fog; w: halo depth in angstrom
+    cue: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -178,6 +188,10 @@ pub struct Renderer {
     /// flat colors with an outline instead of lighting
     pub flat: bool,
     pub outline: [f32; 4],
+    /// how far the farthest atoms fade towards the background (0: no fog)
+    pub fog: f32,
+    /// (center, radius) of the spheres last uploaded, for the depth range
+    depth_spheres: Vec<([f32; 3], f32)>,
 }
 
 impl Renderer {
@@ -229,6 +243,8 @@ impl Renderer {
             color_gamma: DEFAULT_COLOR_GAMMA,
             flat: false,
             outline: [0.0, 0.0, 0.0, 1.0],
+            fog: DEFAULT_FOG,
+            depth_spheres: Vec::new(),
         }
     }
 
@@ -239,6 +255,7 @@ impl Renderer {
     /// Upload the instances that change with the frame.
     pub fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, geometry: &Geometry) {
         self.upload_slot(device, queue, Slot::Spheres, &geometry.spheres);
+        self.depth_spheres = geometry.spheres.iter().map(|s| (s.center, s.radius.abs())).collect();
         self.upload_slot(device, queue, Slot::Tubes, &geometry.tubes);
         self.upload_slot(device, queue, Slot::Cones, &geometry.cones);
         self.upload_slot(device, queue, Slot::GhostSpheres, &geometry.ghost_spheres);
@@ -295,13 +312,21 @@ impl Renderer {
         let viewport = viewport.unwrap_or([0.0, 0.0, size.0 as f32, size.1 as f32]);
         let aspect = viewport[2] / viewport[3].max(1.0);
         let light = Vec3::new(-0.35, 0.45, 1.0).normalize();
+        let view = camera.view();
+        let (near, far) = self.depth_spheres.iter().fold((f32::MAX, f32::MIN), |(near, far), &(c, r)| {
+            let depth = -view.transform_point3(Vec3::from(c)).z;
+            (near.min(depth - r), far.max(depth + r))
+        });
+        let (near, far) = if near < far { (near, far) } else { (camera.distance - camera.extent, camera.distance + camera.extent) };
         let globals = Globals {
-            view: camera.view().to_cols_array_2d(),
+            view: view.to_cols_array_2d(),
             proj: camera.projection(aspect).to_cols_array_2d(),
             viewport: [viewport[2], viewport[3], 0.0, 0.0],
             light: light.extend(self.color_gamma).to_array(),
-            shading: [if self.flat { 1.0 } else { 0.0 }, OUTLINE_WIDTH, OUTLINE_MIN_PIXELS, 0.0],
+            shading: [if self.flat { 1.0 } else { 0.0 }, OUTLINE_WIDTH, OUTLINE_MIN_PIXELS, HALO_WIDTH],
             outline: self.outline,
+            background: self.background,
+            cue: [near, far, self.fog, HALO_DEPTH],
         };
         queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
 
@@ -433,14 +458,16 @@ impl Renderer {
             Variant::Blended | Variant::Overlay => 0.0,
             _ => 1.0,
         };
-        let constants = [("OUTLINES", outlines)];
+        let halo = if shader == Shader::Spheres && variant == Variant::Opaque { 1.0 } else { 0.0 };
+        let sphere_constants = [("OUTLINES", outlines), ("HALO", halo)];
+        let constants: &[(&str, f64)] = if shader == Shader::Spheres { &sphere_constants } else { &sphere_constants[..1] };
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(&format!("{shader:?} {variant:?}")),
             layout: Some(&self.layout),
             vertex: wgpu::VertexState {
                 module,
                 entry_point: Some("vs"),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions { constants, ..Default::default() },
                 buffers,
             },
             primitive: wgpu::PrimitiveState { topology, cull_mode, ..Default::default() },
@@ -455,7 +482,7 @@ impl Renderer {
             fragment: Some(wgpu::FragmentState {
                 module,
                 entry_point: Some("fs"),
-                compilation_options: wgpu::PipelineCompilationOptions { constants: &constants, ..Default::default() },
+                compilation_options: wgpu::PipelineCompilationOptions { constants, ..Default::default() },
                 targets: &targets,
             }),
             multiview_mask: None,
