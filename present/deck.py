@@ -76,7 +76,7 @@ class Deck(Slide):
         marks the upcoming step; otherwise it also ends the current one.
 
         view     settings applied when the step starts (see present.live): camera, frame, style,
-                 sidechains, coloring, scrub_discrete, show, hide
+                 sidechains, shading, coloring, scrub_discrete, show, hide
         still    also draw a still image of the view into the region (what the rendered slides
                  show; the live view covers it). Returned, e.g. to replace it later; None without.
         """
