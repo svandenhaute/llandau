@@ -7,8 +7,8 @@ an explorer window, or render offscreen to numpy.
 Install a wheel from the GitHub releases (macOS and Linux, Python >= 3.10):
 
 ```
-pip install "riemann_viewer @ https://github.com/svandenhaute/riemann_viewer/releases/download/v0.3.2/riemann_viewer-0.3.2-cp310-abi3-manylinux_2_28_x86_64.whl"
-pip install "riemann_viewer @ https://github.com/svandenhaute/riemann_viewer/releases/download/v0.3.2/riemann_viewer-0.3.2-cp310-abi3-macosx_11_0_arm64.whl"
+pip install "riemann_viewer @ https://github.com/svandenhaute/riemann_viewer/releases/download/v0.4.0/riemann_viewer-0.4.0-cp310-abi3-manylinux_2_28_x86_64.whl"
+pip install "riemann_viewer @ https://github.com/svandenhaute/riemann_viewer/releases/download/v0.4.0/riemann_viewer-0.4.0-cp310-abi3-macosx_11_0_arm64.whl"
 ```
 
 or build it (needs Rust):

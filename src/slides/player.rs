@@ -4,6 +4,7 @@
 //! ← PageUp ↑ go back one step, Home and End go to the first and last step,
 //! R replays the step, F toggles full screen, Escape leaves full screen or
 //! closes, Q closes. Scrolling scrubs through time, faster when scrolling fast.
+//! Over a live 3D view, the mouse and some keys go to it (see `live`).
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -11,12 +12,13 @@ use std::time::Instant;
 use pyo3::prelude::*;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, KeyEvent, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
-use winit::keyboard::{Key, NamedKey};
+use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::platform::run_on_demand::EventLoopExtRunOnDemand;
 use winit::window::{Fullscreen, Window, WindowId};
 
+use super::live::Lives;
 use super::paint::{Image, Painter};
 use super::timeline::Timeline;
 use crate::render::{Gpu, Offscreen};
@@ -48,7 +50,9 @@ struct App<'a> {
     painter: &'a mut Painter,
     timeline: &'a Timeline,
     images: &'a [Image],
+    lives: &'a mut Lives,
     options: Options,
+    modifiers: ModifiersState,
     surface: Option<Surface>,
     /// the current step: the presentation pauses at its mark
     step: usize,
@@ -66,6 +70,7 @@ pub fn play(
     painter: &mut Painter,
     timeline: &Timeline,
     images: &[Image],
+    lives: &mut Lives,
     options: Options,
 ) -> PyResult<()> {
     crate::window::with_event_loop(|event_loop| {
@@ -76,7 +81,9 @@ pub fn play(
             painter,
             timeline,
             images,
+            lives,
             options,
+            modifiers: ModifiersState::empty(),
             surface: None,
             step: start,
             time: 0.0,
@@ -195,9 +202,14 @@ impl App<'_> {
                 self.playing = None;
             }
         }
+        if let Err(error) = self.lives.enter(self.py, self.timeline, self.time) {
+            self.error = Some(error);
+        }
+        let live_moving = self.lives.animate(self.py);
         let Some(target) = self.surface.as_mut() else { return };
+        let size = (target.config.width, target.config.height);
+        self.lives.draw(self.py, self.gpu, self.painter, self.timeline, self.time, size);
         if let Some(path) = self.options.screenshot.take() {
-            let size = (target.config.width, target.config.height);
             let offscreen = Offscreen::with_format(&self.gpu.device, size, target.config.format);
             self.painter.draw(
                 &self.gpu.device,
@@ -227,7 +239,6 @@ impl App<'_> {
             _ => return,
         };
         let view = texture.texture.create_view(&Default::default());
-        let size = (target.config.width, target.config.height);
         self.painter.draw(
             &self.gpu.device,
             &self.gpu.queue,
@@ -239,7 +250,7 @@ impl App<'_> {
             size,
         );
         self.gpu.queue.present(texture);
-        if self.playing.is_some() {
+        if self.playing.is_some() || live_moving {
             target.window.request_redraw();
         }
     }
@@ -250,6 +261,13 @@ impl App<'_> {
         }
         let Some(target) = self.surface.as_ref() else { return };
         let window = target.window.clone();
+        if let Key::Character(c) = event.logical_key.as_ref() {
+            let shift = self.modifiers.shift_key();
+            if self.lives.key(self.py, self.timeline, self.time, &c.to_lowercase(), shift) {
+                window.request_redraw();
+                return;
+            }
+        }
         match event.logical_key.as_ref() {
             Key::Named(NamedKey::ArrowRight | NamedKey::Space | NamedKey::PageDown | NamedKey::ArrowDown) => {
                 self.forward()
@@ -282,6 +300,16 @@ impl App<'_> {
             _ => return,
         }
         window.request_redraw();
+    }
+
+    fn size(&self) -> (u32, u32) {
+        self.surface.as_ref().map_or((1, 1), |t| (t.config.width, t.config.height))
+    }
+
+    fn request_redraw(&self) {
+        if let Some(target) = &self.surface {
+            target.window.request_redraw();
+        }
     }
 
     fn close(&mut self, event_loop: &ActiveEventLoop) {
@@ -320,16 +348,37 @@ impl ApplicationHandler for App<'_> {
             }
             WindowEvent::RedrawRequested => self.redraw(),
             WindowEvent::KeyboardInput { event, .. } => self.key(event_loop, event),
+            WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
+            WindowEvent::CursorMoved { position, .. } => {
+                if self.lives.cursor_moved(self.py, self.timeline, self.size(), (position.x, position.y)) {
+                    self.request_redraw();
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                let pressed = state == ElementState::Pressed;
+                let right = button == MouseButton::Right;
+                let shift = self.modifiers.shift_key();
+                if self.lives.button(self.py, self.timeline, self.time, self.size(), pressed, right, shift) {
+                    self.request_redraw();
+                }
+            }
+            WindowEvent::PinchGesture { delta, .. } => {
+                if self.lives.pinch(self.py, self.timeline, self.time, self.size(), delta) {
+                    self.request_redraw();
+                }
+            }
             WindowEvent::MouseWheel { delta, .. } => {
                 let points = match delta {
                     MouseScrollDelta::LineDelta(_, y) => 20.0 * y as f64,
                     MouseScrollDelta::PixelDelta(p) => p.y,
                 };
-                // scrolling down (negative) goes forward in time
-                self.scrub(-points);
-                if let Some(target) = &self.surface {
-                    target.window.request_redraw();
+                let zoom = self.modifiers.control_key() || self.modifiers.super_key();
+                let size = self.size();
+                if !self.lives.scroll(self.py, self.timeline, self.time, size, points as f32, zoom) {
+                    // scrolling down (negative) goes forward in time
+                    self.scrub(-points);
                 }
+                self.request_redraw();
             }
             _ => {}
         }

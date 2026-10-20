@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "riemann_viewer"
-version = "0.3.2"
+version = "0.4.0"
 description = "Small wgpu viewer for atomic trajectories, embeddable in Qt (manim-slides) windows"
 requires-python = ">=3.10"
 license = "MIT"

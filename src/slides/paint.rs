@@ -13,7 +13,7 @@ use lyon::tessellation::{
 };
 use wgpu::util::DeviceExt;
 
-use super::timeline::{Item, Shape, Timeline};
+use super::timeline::{Cap, Item, Join, Shape, Timeline};
 
 const SAMPLES: u32 = 4;
 /// Supersampling on top of the multisampling: rendered at this many times the size.
@@ -61,6 +61,7 @@ struct Mesh {
 enum Command {
     Shapes(std::ops::Range<u32>),
     Image { image: usize, first: u32 },
+    Live { viewer: usize, first: u32 },
 }
 
 struct Targets {
@@ -83,6 +84,8 @@ pub struct Painter {
     texture_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     images: Vec<wgpu::BindGroup>,
+    /// live views' pictures, by viewer
+    live: HashMap<usize, wgpu::BindGroup>,
     targets: Option<Targets>,
     /// tessellations of unchanged shapes, by shape id, at `cache_tolerance`
     cache: HashMap<usize, Mesh>,
@@ -215,6 +218,7 @@ impl Painter {
             texture_layout,
             sampler,
             images: Vec::new(),
+            live: HashMap::new(),
             targets: None,
             cache: HashMap::new(),
             cache_tolerance: 0.0,
@@ -249,6 +253,19 @@ impl Painter {
                 ],
             }));
         }
+    }
+
+    /// The picture of a live view (drawn by its viewer), sampled as written.
+    pub fn set_live(&mut self, device: &wgpu::Device, viewer: usize, view: &wgpu::TextureView) {
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("live"),
+            layout: &self.texture_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+            ],
+        });
+        self.live.insert(viewer, group);
     }
 
     fn ensure_targets(&mut self, device: &wgpu::Device, size: (u32, u32)) {
@@ -368,20 +385,14 @@ impl Painter {
                     if placement.image >= self.images.len() {
                         continue;
                     }
-                    let [cx, cy, w, h] = placement.rect;
-                    let (x0, x1, y0, y1) = (cx - w / 2.0, cx + w / 2.0, cy - h / 2.0, cy + h / 2.0);
-                    let first = image_vertices.len() as u32;
-                    let o = placement.opacity;
-                    let v = |x, y, u, v| ImageVertex { position: [x, y], uv: [u, v], opacity: o };
-                    image_vertices.extend([
-                        v(x0, y1, 0.0, 0.0),
-                        v(x0, y0, 0.0, 1.0),
-                        v(x1, y1, 1.0, 0.0),
-                        v(x1, y1, 1.0, 0.0),
-                        v(x0, y0, 0.0, 1.0),
-                        v(x1, y0, 1.0, 1.0),
-                    ]);
+                    let first = quad(&mut image_vertices, placement.rect, placement.opacity);
                     commands.push(Command::Image { image: placement.image, first });
+                }
+                Item::Live { viewer, rect } => {
+                    if self.live.contains_key(&viewer) {
+                        let first = quad(&mut image_vertices, rect, 1.0);
+                        commands.push(Command::Live { viewer, first });
+                    }
                 }
             }
         }
@@ -433,6 +444,12 @@ impl Painter {
                         pass.set_vertex_buffer(0, quads.slice(..));
                         pass.draw(*first..*first + 6, 0..1);
                     }
+                    Command::Live { viewer, first } => {
+                        pass.set_pipeline(&self.image_pipeline);
+                        pass.set_bind_group(1, &self.live[viewer], &[]);
+                        pass.set_vertex_buffer(0, quads.slice(..));
+                        pass.draw(*first..*first + 6, 0..1);
+                    }
                 }
             }
         }
@@ -466,6 +483,23 @@ pub fn letterbox(frame: [f32; 2], size: (u32, u32)) -> [f32; 4] {
     let scale = (w / frame[0]).min(h / frame[1]);
     let (vw, vh) = ((frame[0] * scale).round().max(1.0), (frame[1] * scale).round().max(1.0));
     [((w - vw) / 2.0).floor(), ((h - vh) / 2.0).floor(), vw, vh]
+}
+
+/// A textured rectangle (center, width, height); returns its first vertex.
+fn quad(vertices: &mut Vec<ImageVertex>, rect: [f32; 4], opacity: f32) -> u32 {
+    let [cx, cy, w, h] = rect;
+    let (x0, x1, y0, y1) = (cx - w / 2.0, cx + w / 2.0, cy - h / 2.0, cy + h / 2.0);
+    let first = vertices.len() as u32;
+    let v = |x, y, u, v| ImageVertex { position: [x, y], uv: [u, v], opacity };
+    vertices.extend([
+        v(x0, y1, 0.0, 0.0),
+        v(x0, y0, 0.0, 1.0),
+        v(x1, y1, 1.0, 0.0),
+        v(x1, y1, 1.0, 0.0),
+        v(x0, y0, 0.0, 1.0),
+        v(x1, y0, 1.0, 1.0),
+    ]);
+    first
 }
 
 fn append(mesh: &mut Mesh, part: &Mesh) {
@@ -516,11 +550,21 @@ fn tessellate(shape: &Shape, tolerance: f32) -> Mesh {
     }
     if style.stroke[3] > 0.0 && style.width > 0.0 {
         let color = style.stroke;
+        let join = match style.join {
+            Join::Miter => LineJoin::Miter,
+            Join::Round => LineJoin::Round,
+            Join::Bevel => LineJoin::Bevel,
+        };
+        let cap = match style.cap {
+            Cap::Butt => LineCap::Butt,
+            Cap::Round => LineCap::Round,
+            Cap::Square => LineCap::Square,
+        };
         let options = StrokeOptions::tolerance(tolerance)
             .with_line_width(style.width)
-            .with_line_join(LineJoin::Miter)
+            .with_line_join(join)
             .with_miter_limit(10.0)
-            .with_line_cap(LineCap::Butt);
+            .with_line_cap(cap);
         let _ = StrokeTessellator::new().tessellate_path(
             &path,
             &options,

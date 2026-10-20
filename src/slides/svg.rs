@@ -35,7 +35,9 @@ fn fonts() -> Arc<usvg::fontdb::Database> {
 }
 
 pub fn parse(data: &[u8]) -> Result<Svg, String> {
-    let options = usvg::Options { fontdb: fonts(), ..Default::default() };
+    // loading the system fonts takes seconds: only for SVGs with text elements
+    let has_text = data.windows(5).any(|w| w == b"<text");
+    let options = if has_text { usvg::Options { fontdb: fonts(), ..Default::default() } } else { usvg::Options::default() };
     let tree = usvg::Tree::from_data(data, &options).map_err(|e| e.to_string())?;
     let mut paths = Vec::new();
     let mut groups = Vec::new();

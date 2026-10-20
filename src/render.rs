@@ -23,6 +23,7 @@ const OUTLINE_WIDTH: f32 = 0.04;
 const OUTLINE_MIN_PIXELS: f32 = 1.2;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
+#[derive(Clone)]
 pub struct Gpu {
     pub instance: wgpu::Instance,
     pub adapter: wgpu::Adapter,
@@ -31,6 +32,13 @@ pub struct Gpu {
 }
 
 impl Gpu {
+    /// The process's GPU, shared by every viewer and deck so that they can draw
+    /// into each other's textures (a deck shows live viewers).
+    pub fn shared() -> Result<Self, String> {
+        static SHARED: std::sync::OnceLock<Result<Gpu, String>> = std::sync::OnceLock::new();
+        SHARED.get_or_init(Gpu::new).clone()
+    }
+
     pub fn new() -> Result<Self, String> {
         // WGPU_BACKEND (e.g. vulkan, gl, metal) overrides the backends
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle_from_env();

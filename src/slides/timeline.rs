@@ -8,23 +8,60 @@
 
 use std::borrow::Cow;
 
-/// Fill and stroke colors (RGBA, as written: sRGB) and the stroke width in
-/// frame units.
+/// Fill and stroke colors (RGBA, as written: sRGB), the stroke width in
+/// frame units, and how strokes join and end.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Style {
     pub fill: [f32; 4],
     pub stroke: [f32; 4],
     pub width: f32,
+    pub join: Join,
+    pub cap: Cap,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Join {
+    #[default]
+    Miter,
+    Round,
+    Bevel,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Cap {
+    #[default]
+    Butt,
+    Round,
+    Square,
 }
 
 impl Style {
+    /// fill RGBA, stroke RGBA, width; optionally join (0 miter, 1 round,
+    /// 2 bevel) and cap (0 butt, 1 round, 2 square)
     pub fn from_array(a: &[f32]) -> Style {
-        Style { fill: [a[0], a[1], a[2], a[3]], stroke: [a[4], a[5], a[6], a[7]], width: a[8] }
+        let join = match a.get(9).map(|v| v.round() as i32) {
+            Some(1) => Join::Round,
+            Some(2) => Join::Bevel,
+            _ => Join::Miter,
+        };
+        let cap = match a.get(10).map(|v| v.round() as i32) {
+            Some(1) => Cap::Round,
+            Some(2) => Cap::Square,
+            _ => Cap::Butt,
+        };
+        Style { fill: [a[0], a[1], a[2], a[3]], stroke: [a[4], a[5], a[6], a[7]], width: a[8], join, cap }
     }
 
     fn lerp(&self, other: &Style, t: f32) -> Style {
         let mix = |a: [f32; 4], b: [f32; 4]| std::array::from_fn(|i| a[i] + t * (b[i] - a[i]));
-        Style { fill: mix(self.fill, other.fill), stroke: mix(self.stroke, other.stroke), width: self.width + t * (other.width - self.width) }
+        let (join, cap) = if t < 0.5 { (self.join, self.cap) } else { (other.join, other.cap) };
+        Style {
+            fill: mix(self.fill, other.fill),
+            stroke: mix(self.stroke, other.stroke),
+            width: self.width + t * (other.width - self.width),
+            join,
+            cap,
+        }
     }
 }
 
@@ -91,6 +128,15 @@ impl Rate {
     }
 }
 
+/// A live 3D view: viewer `viewer`'s picture over `rect` (center, width,
+/// height in frame units) during `span`, on top of everything.
+#[derive(Clone, Copy, Debug)]
+pub struct LiveSpan {
+    pub viewer: usize,
+    pub rect: [f32; 4],
+    pub span: [f64; 2],
+}
+
 /// One step of the presentation: it ends at `time`, where the player pauses.
 #[derive(Clone, Debug)]
 pub struct Mark {
@@ -104,6 +150,7 @@ pub struct Timeline {
     pub shapes: Vec<Shape>,
     pub placements: Vec<Placement>,
     pub clips: Vec<Clip>,
+    pub lives: Vec<LiveSpan>,
     pub rates: Vec<Rate>,
     pub marks: Vec<Mark>,
     pub background: [f32; 4],
@@ -115,6 +162,7 @@ pub struct Timeline {
 pub enum Item<'a> {
     Shape { shape: Cow<'a, Shape>, id: Option<usize> },
     Image(Placement),
+    Live { viewer: usize, rect: [f32; 4] },
 }
 
 /// Stroke width of the outline in Write, in frame units (manim: 2 × 0.01).
@@ -133,7 +181,14 @@ impl Timeline {
         let mut active: Vec<&Clip> =
             self.clips.iter().filter(|c| c.span[0] <= time && time < c.span[1]).collect();
         active.sort_by(|a, b| a.z.total_cmp(&b.z));
-        active.into_iter().filter_map(|clip| self.evaluate(clip, time)).collect()
+        let mut items: Vec<Item<'_>> = active.into_iter().filter_map(|clip| self.evaluate(clip, time)).collect();
+        items.extend(self.live_at(time).map(|i| Item::Live { viewer: self.lives[i].viewer, rect: self.lives[i].rect }));
+        items
+    }
+
+    /// Indices of the live views shown at `time`.
+    pub fn live_at(&self, time: f64) -> impl Iterator<Item = usize> + '_ {
+        (0..self.lives.len()).filter(move |&i| self.lives[i].span[0] <= time && time < self.lives[i].span[1])
     }
 
     fn progress(&self, clip: &Clip, time: f64) -> f32 {
@@ -195,7 +250,7 @@ impl Timeline {
 /// color. (manim takes the color after hiding the fill, so it is the stroke
 /// color even for shapes drawn without a stroke: white for SVG paths.)
 fn outline_style(style: &Style) -> Style {
-    Style { fill: [style.fill[0], style.fill[1], style.fill[2], 0.0], stroke: style.stroke, width: WRITE_OUTLINE }
+    Style { fill: [style.fill[0], style.fill[1], style.fill[2], 0.0], stroke: style.stroke, width: WRITE_OUTLINE, ..*style }
 }
 
 pub fn morph(a: &Shape, b: &Shape, t: f32) -> Shape {
@@ -287,7 +342,7 @@ mod tests {
 
     #[test]
     fn clips_follow_their_windows() {
-        let style = Style { fill: [1.0, 0.0, 0.0, 1.0], stroke: [0.0; 4], width: 0.0 };
+        let style = Style { fill: [1.0, 0.0, 0.0, 1.0], stroke: [0.0; 4], width: 0.0, join: Join::Miter, cap: Cap::Butt };
         let mut timeline = Timeline { rates: vec![Rate::linear()], ..Default::default() };
         timeline.shapes.push(Shape { points: line([0.0, 0.0], [1.0, 0.0]), style });
         timeline.shapes.push(Shape { points: line([0.0, 1.0], [1.0, 1.0]), style });
@@ -313,7 +368,7 @@ mod tests {
 
     #[test]
     fn write_outlines_then_fills() {
-        let style = Style { fill: [1.0, 0.0, 0.0, 1.0], stroke: [0.0; 4], width: 0.0 };
+        let style = Style { fill: [1.0, 0.0, 0.0, 1.0], stroke: [0.0; 4], width: 0.0, join: Join::Miter, cap: Cap::Butt };
         let mut timeline = Timeline::default();
         timeline.shapes.push(Shape { points: line([0.0, 0.0], [1.0, 0.0]), style });
         timeline.clips.push(Clip {

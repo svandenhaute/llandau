@@ -107,7 +107,7 @@ struct Window {
 /// A trajectory viewer. Draw into a native window with `attach` + `render`,
 /// or offscreen with `render_image`.
 #[pyclass(unsendable, subclass)]
-struct Viewer {
+pub struct Viewer {
     gpu: Gpu,
     renderer: Renderer,
     camera: Camera,
@@ -121,6 +121,12 @@ struct Viewer {
 }
 
 impl Viewer {
+    /// Draw into `view` (`size` pixels, `format`), for a deck's live region.
+    pub(crate) fn draw_into_view(&mut self, view: &wgpu::TextureView, format: wgpu::TextureFormat, size: (u32, u32)) {
+        self.upload();
+        self.renderer.draw(&self.gpu.device, &self.gpu.queue, view, format, size, None, &self.camera);
+    }
+
     fn upload(&mut self) {
         let (geometry, trails) = self.stale;
         if geometry {
@@ -169,7 +175,7 @@ impl Viewer {
     #[new]
     #[pyo3(signature = (*_args, **_kwargs))]
     fn new(_args: &Bound<'_, pyo3::types::PyTuple>, _kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
-        let gpu = Gpu::new().map_err(runtime_error)?;
+        let gpu = Gpu::shared().map_err(runtime_error)?;
         let renderer = Renderer::new(&gpu.device);
         Ok(Self {
             gpu,

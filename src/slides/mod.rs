@@ -2,6 +2,7 @@
 //! drawn live, at any moment, in a window or offscreen (see `timeline`).
 //! Python builds the timeline (present); this draws and presents it.
 
+pub mod live;
 pub mod paint;
 pub mod player;
 pub mod svg;
@@ -11,16 +12,19 @@ use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2, PyRead
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 
+use crate::Viewer;
 use crate::render::{Gpu, Offscreen};
+use live::{Entry, Lives};
 use crate::{runtime_error, value_error};
 use paint::{Image, Painter};
-use timeline::{Clip, Kind, Mark, Placement, Rate, Shape, Style, Timeline};
+use timeline::{Clip, Kind, LiveSpan, Mark, Placement, Rate, Shape, Style, Timeline};
 
 /// A deck's timeline, drawn with its own GPU device.
 #[pyclass(unsendable, module = "riemann_viewer._core")]
 pub struct Slides {
     timeline: Timeline,
     images: Vec<Image>,
+    lives: Lives,
     gpu: Option<Gpu>,
     painter: Option<Painter>,
     offscreen: Option<Offscreen>,
@@ -29,7 +33,7 @@ pub struct Slides {
 impl Slides {
     fn gpu(&mut self) -> PyResult<(&Gpu, &mut Painter)> {
         if self.gpu.is_none() {
-            let gpu = Gpu::new().map_err(runtime_error)?;
+            let gpu = Gpu::shared().map_err(runtime_error)?;
             self.painter = Some(Painter::new(&gpu.device));
             self.gpu = Some(gpu);
         }
@@ -48,6 +52,7 @@ impl Slides {
         Slides {
             timeline: Timeline { background: [r, g, b, a], frame: [frame.0, frame.1], ..Default::default() },
             images: Vec::new(),
+            lives: Lives::default(),
             gpu: None,
             painter: None,
             offscreen: None,
@@ -66,12 +71,14 @@ impl Slides {
     }
 
     /// A shape: cubic Bézier control points (4 per curve, (n, 2), frame
-    /// units, y up) and its style: fill RGBA, stroke RGBA, stroke width (9).
+    /// units, y up) and its style: fill RGBA, stroke RGBA, stroke width, and
+    /// optionally join (0 miter, 1 round, 2 bevel) and cap (0 butt, 1 round,
+    /// 2 square).
     /// Returns its id.
     fn add_shape(&mut self, points: PyReadonlyArray2<f32>, style: PyReadonlyArray1<f32>) -> PyResult<usize> {
         let style = style.as_slice()?;
-        if style.len() != 9 {
-            return Err(value_error("style: fill RGBA, stroke RGBA and stroke width"));
+        if style.len() != 9 && style.len() != 11 {
+            return Err(value_error("style: fill RGBA, stroke RGBA, stroke width (and join, cap)"));
         }
         let points = control_points(&points)?;
         self.timeline.shapes.push(Shape { points, style: Style::from_array(style) });
@@ -158,6 +165,27 @@ impl Slides {
         Ok(())
     }
 
+    /// A live 3D view: `viewer` drawn over `rect` (center, width, height in
+    /// frame units) from `start` until `end`, on top of the slide. When its
+    /// step starts, `enter(viewer)` is called and the camera moves to `camera`
+    /// (a camera dict). Not drawn by render().
+    #[pyo3(signature = (viewer, rect, start, end, enter = None, camera = None))]
+    #[allow(clippy::too_many_arguments)]
+    fn add_live(
+        &mut self,
+        viewer: Py<Viewer>,
+        rect: (f32, f32, f32, f32),
+        start: f64,
+        end: f64,
+        enter: Option<Py<PyAny>>,
+        camera: Option<Py<PyDict>>,
+    ) -> usize {
+        let viewer = self.lives.viewer_index(viewer);
+        self.timeline.lives.push(LiveSpan { viewer, rect: [rect.0, rect.1, rect.2, rect.3], span: [start, end] });
+        self.lives.entries.push(Entry { enter, camera });
+        self.timeline.lives.len() - 1
+    }
+
     /// The end of a step: the presentation pauses at `time`. `slide` numbers
     /// the slide it belongs to; `notes` are the step's notes.
     #[pyo3(signature = (time, slide = 0, notes = String::new()))]
@@ -217,7 +245,8 @@ impl Slides {
         self.gpu()?;
         let title = title.unwrap_or_else(|| "slides".into());
         let options = player::Options { title, size, fullscreen, start, screenshot };
-        player::play(py, self.gpu.as_ref().unwrap(), self.painter.as_mut().unwrap(), &self.timeline, &self.images, options)
+        let (gpu, painter) = (self.gpu.as_ref().unwrap(), self.painter.as_mut().unwrap());
+        player::play(py, gpu, painter, &self.timeline, &self.images, &mut self.lives, options)
     }
 }
 
