@@ -129,14 +129,20 @@ struct App<'a, V: Explorable> {
     error: Option<PyErr>,
 }
 
-pub fn explore<V: Explorable>(viewer: &mut V, py: Python<'_>, options: Options) -> PyResult<()> {
+/// Run `f` with the process's event loop (created on first use).
+pub fn with_event_loop<T>(f: impl FnOnce(&mut EventLoop<()>) -> PyResult<T>) -> PyResult<T> {
     EVENT_LOOP.with(|cell| {
         let mut slot = cell.borrow_mut();
         if slot.is_none() {
             let event_loop = EventLoop::new().map_err(|e| crate::runtime_error(format!("cannot open a window: {e}")))?;
             *slot = Some(event_loop);
         }
-        let event_loop = slot.as_mut().unwrap();
+        f(slot.as_mut().unwrap())
+    })
+}
+
+pub fn explore<V: Explorable>(viewer: &mut V, py: Python<'_>, options: Options) -> PyResult<()> {
+    with_event_loop(|event_loop| {
         let initial_scales = viewer.controls().vector_scales();
         let mut app = App {
             viewer,
@@ -625,7 +631,7 @@ fn interpolate(xs: &[f64], ys: &[f64], x: f64) -> f64 {
     }
 }
 
-fn save_png(path: &str, size: (u32, u32), format: wgpu::TextureFormat, pixels: &[u8]) -> Result<(), String> {
+pub(crate) fn save_png(path: &str, size: (u32, u32), format: wgpu::TextureFormat, pixels: &[u8]) -> Result<(), String> {
     let mut rgba = pixels.to_vec();
     if matches!(format, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb) {
         rgba.chunks_exact_mut(4).for_each(|p| p.swap(0, 2));

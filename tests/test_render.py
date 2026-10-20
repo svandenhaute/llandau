@@ -118,3 +118,23 @@ def test_explorer_window(viewer, tmp_path):
     assert drawn(view) > 0.001  # the molecule
     assert (panel != 255).any()  # the panel
     explore(viewer, screenshot=str(path))  # a second window in the same process
+
+
+def test_slides_timeline():
+    from riemann_viewer._core import Slides, parse_svg
+
+    svg = parse_svg(b'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">'
+                    b'<rect x="2" y="2" width="6" height="6" fill="#000"/></svg>')
+    points = svg["paths"][0]["points"]
+    assert points.shape == (16, 2)
+    slides = Slides(frame=(16.0, 9.0), background=(1, 1, 1, 1))
+    square = slides.add_shape((points - 5).astype(np.float32), np.array([0, 0, 0, 1, 0, 0, 0, 0, 0], np.float32))
+    slides.add_clip("write", square, square, 0.0, 0.0, float("inf"), (0.0, 1.0))
+    slides.add_mark(1.0)
+    assert slides.duration == 1.0
+    start, middle, end = (slides.render(t, 160, 90) for t in (0.0, 0.75, 1.0))
+    ink = lambda image: 1 - image[..., :3].mean() / 255  # noqa: E731
+    assert ink(start) == 0
+    # halfway through filling in: half as dark
+    assert ink(middle) == pytest.approx(ink(end) / 2, rel=0.1)
+    assert ink(end) == pytest.approx(36 / 144, abs=0.02)  # 6 x 6 of the 16 x 9 frame

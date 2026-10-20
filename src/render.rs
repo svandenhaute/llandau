@@ -543,6 +543,10 @@ impl Offscreen {
         Self { size, format, texture, view, buffer, padded_row }
     }
 
+    pub fn size(&self) -> (u32, u32) {
+        self.size
+    }
+
     pub fn view(&self) -> &wgpu::TextureView {
         &self.view
     }

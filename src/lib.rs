@@ -6,6 +6,7 @@ pub mod clash;
 pub mod protein;
 pub mod render;
 pub mod scene;
+pub mod slides;
 pub mod surface;
 pub mod theme;
 pub mod window;
@@ -29,7 +30,7 @@ pub(crate) fn runtime_error(message: impl std::fmt::Display) -> PyErr {
     PyRuntimeError::new_err(message.to_string())
 }
 
-fn value_error(message: impl std::fmt::Display) -> PyErr {
+pub(crate) fn value_error(message: impl std::fmt::Display) -> PyErr {
     PyValueError::new_err(message.to_string())
 }
 
@@ -979,6 +980,9 @@ impl Viewer {
 #[pymodule]
 fn _core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Viewer>()?;
+    module.add_class::<slides::Slides>()?;
+    module.add_function(wrap_pyfunction!(slides::parse_svg, module)?)?;
+    module.add_function(wrap_pyfunction!(slides::image_size, module)?)?;
     Ok(())
 }
 
