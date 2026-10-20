@@ -7,10 +7,13 @@ name = "molview"
 version = "0.1.0"
 description = "Small wgpu viewer for atomic trajectories, embeddable in Qt (manim-slides) windows"
 requires-python = ">=3.10"
+license = "MIT"
+readme = "README.md"
 dependencies = ["numpy"]
 
 [project.optional-dependencies]
-qt = ["qtpy"]
+qt = ["qtpy", "PySide6"]
+test = ["pytest", "qtpy", "PySide6"]
 
 [tool.maturin]
 python-source = "python"

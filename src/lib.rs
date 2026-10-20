@@ -20,7 +20,7 @@ use pyo3::types::PyDict;
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
 use camera::Camera;
-use render::{Gpu, Renderer};
+use render::{Gpu, Offscreen, Renderer};
 use scene::{Coloring, Ghost, Points, Scene, Sidechains, Structure, Style, SurfaceColors, VectorField};
 use theme::{Rgba, Theme};
 
@@ -107,6 +107,7 @@ struct Viewer {
     /// whether the frame geometry and the trails need uploading
     stale: (bool, bool),
     window: Option<Window>,
+    offscreen: Option<Offscreen>,
 }
 
 impl Viewer {
@@ -168,10 +169,18 @@ impl Viewer {
             frame: 0,
             stale: (true, true),
             window: None,
+            offscreen: None,
         })
     }
 
     // --- output ----------------------------------------------------------------
+
+    /// The GPU in use: name, backend (Metal, Vulkan, Gl) and type (a CPU type means software rendering).
+    #[getter]
+    fn adapter(&self) -> String {
+        let info = self.gpu.adapter.get_info();
+        format!("{} ({:?}, {:?})", info.name, info.backend, info.device_type)
+    }
 
     /// Draw into the native window `handle` (an NSView on macOS, HWND on Windows,
     /// X11 window otherwise) of `width` x `height` physical pixels.
@@ -247,8 +256,9 @@ impl Viewer {
     /// Draw offscreen; returns an (height, width, 4) uint8 RGBA array.
     fn render_image<'py>(&mut self, py: Python<'py>, width: u32, height: u32) -> PyResult<Bound<'py, PyAny>> {
         self.upload();
-        let pixels = render::render_image(&self.gpu, &mut self.renderer, (width, height), &self.camera);
-        let array = PyArray1::from_vec(py, pixels).reshape([height as usize, width as usize, 4])?;
+        let pixels =
+            render::render_image(&self.gpu, &mut self.renderer, &mut self.offscreen, (width, height), &self.camera);
+        let array = PyArray1::from_vec(py, pixels).reshape([height.max(1) as usize, width.max(1) as usize, 4])?;
         Ok(array.into_any())
     }
 
@@ -822,9 +832,11 @@ impl Viewer {
         self.camera.orbit(dx, dy);
     }
 
-    /// Translate by a mouse drag of (dx, dy) pixels.
-    fn pan(&mut self, dx: f32, dy: f32) {
-        let height = self.height();
+    /// Translate by a mouse drag of (dx, dy) pixels, in a view `height` pixels high
+    /// (default: the attached window's).
+    #[pyo3(signature = (dx, dy, height = None))]
+    fn pan(&mut self, dx: f32, dy: f32, height: Option<f32>) {
+        let height = height.unwrap_or_else(|| self.height());
         self.camera.pan(dx, dy, height);
     }
 

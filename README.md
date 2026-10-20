@@ -4,6 +4,15 @@ A small wgpu viewer for atomic trajectories. It draws straight into a native
 window handle, so it can float over a slide in the manim-slides player, sit in
 an explorer window, or render offscreen to numpy.
 
+Install a wheel from the GitHub releases (macOS and Linux, Python >= 3.10):
+
+```
+pip install "molview[qt] @ https://github.com/svandenhaute/molview/releases/download/v0.1.0/<wheel for your platform>"
+gh release download v0.1.0 -R svandenhaute/molview -p "*manylinux*x86_64*" && pip install ./molview-*.whl "molview[qt]"
+```
+
+or build it (needs Rust):
+
 ```
 pip install maturin && maturin develop --release     # MACOSX_DEPLOYMENT_TARGET=15.0 on macOS
 python examples/explore_butane.py                     # explorer window
@@ -37,6 +46,12 @@ Roles (as riemann's `atom_role`): 0 hydrogen, 1 side chain heavy atom, 2 backbon
 The protein style draws a smooth tube through the CAs and the side chains, no hydrogens;
 trails follow the CAs only. Themes ("light", "dark") set the background and every
 non-element color; element colors come from `molview.elements`.
+
+On Linux (X11 or Wayland) the Qt widget renders offscreen and paints the image
+(`MOLVIEW_QT=raster`, the default there); on macOS it draws into its own native
+window (`native`), which the overlay over the manim-slides player needs. Without a
+GPU, a software Vulkan driver (Mesa's lavapipe) works; `WGPU_BACKEND=vulkan|gl|metal`
+picks the backend, `Viewer().adapter` tells which GPU is in use.
 
 `molview.qt.ViewerWidget`: left drag rotates, right drag (or shift + drag) pans,
 wheel scrubs frames, ctrl + wheel or pinch zooms, double click resets the camera.

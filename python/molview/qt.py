@@ -1,7 +1,15 @@
-"""A Qt widget that the viewer draws into directly (a native child window).
+"""A Qt widget showing a viewer.
 
     widget = ViewerWidget(parent)
-    widget.viewer.set_molecule(...)
+    widget.viewer.load(positions, numbers)
+
+Two ways to get the pictures on screen:
+  native  wgpu draws straight into the widget's own native window (macOS, Windows;
+          needed for overlays over the manim-slides player)
+  raster  the viewer renders offscreen and the widget paints the image, like any
+          Qt widget (works everywhere, e.g. Wayland; a copy per frame)
+The default is native on macOS and Windows and raster elsewhere; the environment
+variable MOLVIEW_QT=native|raster or the `mode` argument overrides it.
 
 Mouse: left drag rotates, right drag (or shift + left) pans, wheel scrubs the
 trajectory, ctrl + wheel or a pinch zooms, double click resets the camera.
@@ -9,12 +17,23 @@ Keyboard input is left to the parent (e.g. the manim-slides player).
 """
 from __future__ import annotations
 
+import os
+import sys
+
 from qtpy.QtCore import QEvent, QPointF, Qt, QTimer, Signal
+from qtpy.QtGui import QImage, QPainter
 from qtpy.QtWidgets import QWidget
 
 from . import Viewer
 
-__all__ = ["ViewerWidget"]
+__all__ = ["ViewerWidget", "default_mode"]
+
+
+def default_mode() -> str:
+    mode = os.environ.get("MOLVIEW_QT")
+    if mode in ("native", "raster"):
+        return mode
+    return "native" if sys.platform in ("darwin", "win32") else "raster"
 
 
 class ViewerWidget(QWidget):
@@ -23,7 +42,13 @@ class ViewerWidget(QWidget):
 
     frame_changed = Signal(int)  # when the wheel scrubs
 
-    def __init__(self, parent: QWidget | None = None, viewer: Viewer | None = None, overlay: bool = False):
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        viewer: Viewer | None = None,
+        overlay: bool = False,
+        mode: str | None = None,
+    ):
         flags = Qt.WindowType.Widget
         if overlay:
             flags = (
@@ -33,13 +58,15 @@ class ViewerWidget(QWidget):
             )
         super().__init__(parent, flags)
         self.viewer = viewer or Viewer()
+        self.mode = mode or default_mode()
         if overlay:
             self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        # Our own native window, drawn by wgpu instead of Qt; the parents stay as they are.
-        self.setAttribute(Qt.WidgetAttribute.WA_DontCreateNativeAncestors)
-        self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
-        self.setAttribute(Qt.WidgetAttribute.WA_PaintOnScreen)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        if self.mode == "native":
+            # our own native window, drawn by wgpu instead of Qt; the parents stay as they are
+            self.setAttribute(Qt.WidgetAttribute.WA_DontCreateNativeAncestors)
+            self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
+            self.setAttribute(Qt.WidgetAttribute.WA_PaintOnScreen)
+            self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._attached = False
@@ -50,14 +77,16 @@ class ViewerWidget(QWidget):
         self._timer.timeout.connect(self._render)
 
     def paintEngine(self):  # noqa: N802
-        return None  # wgpu draws; tell Qt not to
+        return None if self.mode == "native" else super().paintEngine()  # native: wgpu draws, not Qt
 
     def _pixels(self) -> tuple[int, int]:
         ratio = self.devicePixelRatioF()
         return max(1, round(self.width() * ratio)), max(1, round(self.height() * ratio))
 
     def request_render(self):
-        if not self._timer.isActive():
+        if self.mode == "raster":
+            self.update()  # Qt coalesces these into one paint
+        elif not self._timer.isActive():
             self._timer.start()
 
     def _render(self):
@@ -68,7 +97,7 @@ class ViewerWidget(QWidget):
 
     def showEvent(self, event):  # noqa: N802
         super().showEvent(event)
-        if not self._attached:
+        if self.mode == "native" and not self._attached:
             self.viewer.attach(int(self.winId()), *self._pixels())
             self._attached = True
         self.request_render()
@@ -77,10 +106,19 @@ class ViewerWidget(QWidget):
         super().resizeEvent(event)
         if self._attached:
             self.viewer.resize(*self._pixels())
-            self.request_render()
+        self.request_render()
 
     def paintEvent(self, event):  # noqa: N802
-        self.request_render()
+        if self.mode == "native":
+            self.request_render()
+            return
+        width, height = self._pixels()
+        pixels = self.viewer.render_image(width, height)
+        image = QImage(pixels.data, width, height, 4 * width, QImage.Format.Format_RGBA8888)
+        image.setDevicePixelRatio(self.devicePixelRatioF())
+        painter = QPainter(self)
+        painter.drawImage(0, 0, image)
+        painter.end()
 
     def event(self, event):
         if event.type() == QEvent.Type.NativeGesture and event.gestureType() == Qt.NativeGestureType.ZoomNativeGesture:
@@ -90,8 +128,9 @@ class ViewerWidget(QWidget):
         return super().event(event)
 
     def closeEvent(self, event):  # noqa: N802
-        self.viewer.detach()
-        self._attached = False
+        if self._attached:
+            self.viewer.detach()
+            self._attached = False
         super().closeEvent(event)
 
     # --- mouse -----------------------------------------------------------------
@@ -117,7 +156,7 @@ class ViewerWidget(QWidget):
             event.modifiers() & Qt.KeyboardModifier.ShiftModifier
         )
         if pan:
-            self.viewer.pan(dx, dy)
+            self.viewer.pan(dx, dy, self._pixels()[1])
         else:
             self.viewer.orbit(dx, dy)
         self.request_render()

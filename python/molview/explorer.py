@@ -101,6 +101,7 @@ class Explorer(QWidget):
         self.t = np.arange(frames, dtype=float) if t is None else np.asarray(t, float)
 
         panel = QWidget()
+        panel.setMinimumWidth(300)
         layout = QVBoxLayout(panel)
         if info:
             layout.addWidget(QLabel(info))
