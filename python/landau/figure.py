@@ -105,11 +105,16 @@ class Figure(Group):
             parts.append(ax)
         artists = sorted((a for ax in self.axes for a in ax.artists), key=lambda a: a.z_index)
         self.submobjects = parts + artists + list(self.extras)
+        # the extras stay on top
+        top = max((getattr(m, "z_index", 0) for a in parts + artists for m in a.get_family()), default=0)
+        for m in self.extras:
+            for part in m.get_family():
+                part.z_index = max(getattr(part, "z_index", 0), top)
         return super().get_family()
 
     def drawn(self) -> list[Mobject]:
-        """Everything drawn, bottom to top."""
-        return [m for m in self.get_family()[1:] if _drawable(m)]
+        """Everything drawn, bottom to top (by z_index, then in order)."""
+        return sorted((m for m in self.get_family()[1:] if _drawable(m)), key=lambda m: getattr(m, "z_index", 0))
 
     # --- output ---------------------------------------------------------------------------
 

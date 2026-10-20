@@ -10,7 +10,7 @@ class Results(Deck):
     theme = LIGHT
 
     def construct(self):
-        self.title("train 'likelihood' functions!")
+        self.title("sampling a double well")
         top, bottom = R.body.vsplit(0.88)
         left, right = top.hsplit(0.5, gap=0.4)
 
@@ -26,7 +26,7 @@ class Results(Deck):
         self.reveal(ax)
         self.reveal(profile, anim=Create)
         self.reveal(density, legend, anim=FadeIn)
-        self.reveal(place(text("cost $tilde N^3$"), bottom), anim=Write)
+        self.reveal(place(text("$p(x) prop e^(-U(x) \\/ k T)$"), bottom), anim=Write)
 
         # samples from the density, then their histogram
         rng = np.random.default_rng(0)

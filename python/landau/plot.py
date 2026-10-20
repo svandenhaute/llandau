@@ -331,6 +331,9 @@ class Artist(VGroup):
     def draw(self):
         self.submobjects = []
         getattr(self.ax, f"_draw_{self.kind}")(self)
+        # the parts carry the artist's z, also inside a group or a figure
+        for m in self.submobjects:
+            m.set_z_index(self.z_index)
 
     def frame_points(self) -> np.ndarray:
         """Data points in frame units (for the legend's placement)."""
@@ -544,6 +547,9 @@ class Plot(VGroup):
         for k in sides:
             spines.add(Line(corners[k], corners[(k + 1) % 4], color=fg, stroke_width=lw_axes, cap_style="square"))
         frame.add(spines)
+        # the box and its ticks sit on top of the data (below text and the legend)
+        data = [a.z_index for a in self.artists if a.kind not in ("text", "colorbar", "legend")]
+        VGroup(ticks, spines).set_z_index(max([2.5, *(z + 0.5 for z in data)]))
         for x, m in zip(xt, xl):
             m.move_to([self._fx(x), y0 - out_tick - pad - ascent, 0], aligned_edge=UP)
         for y, m in zip(yt, yl):

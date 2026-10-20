@@ -186,13 +186,18 @@ class _Builder:
             order = scene._order[id(top)] = scene._next_order()
         return getattr(top, "z_index", 0) * 1e6 + order
 
+    @staticmethod
+    def lift(top, part) -> float:
+        """A part with a higher z_index than its top (e.g. a plot's spines) draws above it."""
+        return max(getattr(part, "z_index", 0) - getattr(top, "z_index", 0), 0) * 1e6
+
     def drawn(self, scene):
         """(part, z) of everything on screen, bottom to top."""
         for top in scene.mobjects:
             parts = [m for m in top.family_members_with_points() if _drawable(m)]
             base = self.z_index(scene, top)
             for k, m in enumerate(parts):
-                yield m, base + (k + 0.5) / (len(parts) + 1)
+                yield m, base + self.lift(top, m) + (k + 0.5) / (len(parts) + 1)
 
     def z_of(self, mobject):
         """z(i, n) for the i-th of n parts that `mobject` turns into."""
@@ -205,7 +210,12 @@ class _Builder:
                 base = self.z_index(scene, top)
                 first = ids.index(id(mine[0])) if mine and id(mine[0]) in ids else 0
                 count, size = len(parts), max(len(mine), 1)
-                return lambda i, n: base + (first + (i + 0.5) * size / max(n, 1)) / (count + 1)
+                lifts = [self.lift(top, m) for m in mine] or [0.0]
+
+                def z(i, n):
+                    lift = lifts[min(int(i * len(lifts) / max(n, 1)), len(lifts) - 1)]
+                    return base + lift + (first + (i + 0.5) * size / max(n, 1)) / (count + 1)
+                return z
         base = getattr(mobject, "z_index", 0) * 1e6 + scene._next_order()
         return lambda i, n: base + (i + 0.5) / (n + 1)
 

@@ -12,10 +12,10 @@ from landau import *
 class Results(Deck):
     theme = LIGHT
     def construct(self):
-        self.title("train 'likelihood' functions!")
-        reaction = self.reveal(image("figures/reaction.png", R.body.left))
-        self.reveal(below(text("cost $tilde N^3$"), reaction), anim=Write)
-        self.show_svg("figures/logits.svg", R.body.right)   # one slide step per Inkscape layer
+        self.title("sampling a double well")
+        energy = self.reveal(image("figures/energy.png", R.body.left))
+        self.reveal(below(text("$p(x) prop e^(-U(x) \/ k T)$"), energy), anim=Write)
+        self.show_svg("figures/sketch.svg", R.body.right)   # one slide step per Inkscape layer
 
 SLIDES = order(Results)
 ```

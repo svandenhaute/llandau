@@ -1,5 +1,4 @@
-"""Paper figures with landau instead of matplotlib: four figures as in riemann's paper
-scripts (reaction_paths/plot_ode.py, muller_brown/main.py), on synthetic data of the same shape.
+"""Paper figures with landau instead of matplotlib: four typical figures, on synthetic data.
 
     python examples/paper_figures.py      # ode.svg quasipotentials.svg paths.svg energy.svg/.pdf/.png
 """

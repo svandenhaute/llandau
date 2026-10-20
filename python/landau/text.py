@@ -1,7 +1,7 @@
 """Text in Linux Biolinum, all of it typeset with Typst (math too).
 
     text("plain"), bold("strong"), italic("aside")
-    text("cost $tilde N^3$")          # contains $ -> the whole string is Typst markup
+    text("cost $O(N^3)$")            # contains $ -> the whole string is Typst markup
     eq("arrow(F) = m arrow(a)")       # display math, Typst syntax
     title("slide title"), bullets([...])
 """
