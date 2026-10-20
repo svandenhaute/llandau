@@ -8,6 +8,7 @@ use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 
 use crate::clash;
+use crate::occlusion;
 use crate::surface::{self, MeshVertex};
 use crate::protein::{self, ALPHA, HYDROGEN, SIDECHAIN};
 use crate::theme::{self, Rgba, Theme};
@@ -234,6 +235,8 @@ pub struct Scene {
     pub clash_overlap: f32,
     /// the frame index walks the discrete states instead of the path frames
     pub scrub_discrete: bool,
+    /// how much buried atoms darken (ambient occlusion per atom; 0: none)
+    pub occlusion: f32,
 }
 
 /// Colors of the non-atom parts of a structure (faded for the ghost).
@@ -276,6 +279,7 @@ impl Default for Scene {
             show_clashes: false,
             clash_overlap: 0.4,
             scrub_discrete: false,
+            occlusion: 0.5,
         }
     }
 }
@@ -342,6 +346,24 @@ impl Scene {
         let on_path = discrete.is_none();
         let path_frame = discrete.unwrap_or(frame);
         let mut colors = self.atom_colors(s, path_frame);
+        let mut backbone = s.backbone_colors.clone();
+        if self.occlusion > 0.0 {
+            let atoms: Vec<usize> = (0..s.num_atoms).collect();
+            let shade: Vec<f32> =
+                occlusion::buried(positions, &s.vdw, &atoms).iter().map(|b| 1.0 - self.occlusion * b).collect();
+            let darken = |c: Rgba, f: f32| [c[0] * f, c[1] * f, c[2] * f, c[3]];
+            for (c, &f) in colors.iter_mut().zip(&shade) {
+                *c = darken(*c, f);
+            }
+            // the backbone tube, per residue by its CA
+            if self.style == Style::Protein && !s.chains.is_empty() {
+                let cas = s.chains.iter().flatten();
+                backbone = Some(match &backbone {
+                    Some(b) => cas.zip(b).map(|(&a, &c)| darken(c, shade[a])).collect(),
+                    None => cas.map(|&a| darken(self.theme.tube, shade[a])).collect(),
+                });
+            }
+        }
 
         let clashes = if self.show_clashes { self.clashes(s, positions) } else { vec![] };
         for &(i, j, _) in &clashes {
@@ -353,7 +375,7 @@ impl Scene {
 
         if self.show_atoms {
             let bond = self.bond_color.unwrap_or(self.theme.bond);
-            let palette = Palette { bond, tube: self.theme.tube, backbone: s.backbone_colors.clone() };
+            let palette = Palette { bond, tube: self.theme.tube, backbone };
             self.draw_structure(s, positions, &colors, &palette, &mut out.spheres, &mut out.tubes);
         }
 

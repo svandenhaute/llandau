@@ -42,6 +42,7 @@ struct VertexOut {
     @location(3) color_start: vec4<f32>,
     @location(4) color_end: vec4<f32>,
     @location(5) radius: f32,
+    @location(6) axis: vec3<f32>,
 };
 
 @vertex
@@ -69,6 +70,7 @@ fn vs(vertex: Vertex, instance: Instance) -> VertexOut {
     out.color_start = instance.color_start;
     out.color_end = instance.color_end;
     out.radius = r;
+    out.axis = (g.view * vec4(w, 0.0)).xyz;
     return out;
 }
 
@@ -78,9 +80,14 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
     let normal = normalize(in.normal);
     let to_eye = normalize(-in.position);
     if g.shading.x > 0.5 {
-        // distance from the axis as a fraction of the radius, in view; about
-        // linear across the tube on screen (exact pixels: fwidth makes a wobbly rim)
-        let across = sqrt(max(1.0 - pow(dot(normal, to_eye), 2.0), 0.0));
+        // distance from the axis on screen as a fraction of the radius, whatever the tilt:
+        // normal and eye direction in the plane normal to the axis (exact pixels: fwidth
+        // makes a wobbly rim)
+        let axis = normalize(in.axis);
+        let around = normal - dot(normal, axis) * axis;
+        let eye = to_eye - dot(to_eye, axis) * axis;
+        let facing = dot(around, eye) / max(length(around) * length(eye), 1e-6);
+        let across = sqrt(max(1.0 - facing * facing, 0.0));
         let pixel_size = 2.0 * -in.position.z / (g.proj[1][1] * g.viewport.y);
         let pixels = (1.0 - across) * in.radius / pixel_size;
         let flat = mix(linear(color.rgb), linear(g.outline.rgb), outline(pixels, in.position.z));

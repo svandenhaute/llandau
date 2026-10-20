@@ -3,6 +3,7 @@
 
 pub mod camera;
 pub mod clash;
+pub mod occlusion;
 pub mod protein;
 pub mod render;
 pub mod scene;
@@ -560,6 +561,19 @@ impl Viewer {
         self.renderer.fog = fog.clamp(0.0, 1.0);
     }
 
+    /// Ambient occlusion per atom: how much the most buried atoms darken
+    /// (0: none, 1: to black), by how much their neighbors surround them.
+    #[getter]
+    fn occlusion(&self) -> f32 {
+        self.scene.occlusion
+    }
+
+    #[setter]
+    fn set_occlusion(&mut self, occlusion: f32) {
+        self.scene.occlusion = occlusion.clamp(0.0, 1.0);
+        self.changed();
+    }
+
     /// "lit" (lighting and highlights) or "flat" (plain colors with a dark
     /// outline, as cinemol draws them; atoms in front of others far behind get a halo).
     #[getter]
@@ -1107,6 +1121,12 @@ impl window::Controls for Viewer {
     }
     fn set_fog(&mut self, fog: f32) {
         Viewer::set_fog(self, fog)
+    }
+    fn occlusion(&self) -> f32 {
+        self.scene.occlusion
+    }
+    fn set_occlusion(&mut self, occlusion: f32) {
+        Viewer::set_occlusion(self, occlusion)
     }
     fn radius_scale(&self) -> f32 {
         self.scene.radius_scale

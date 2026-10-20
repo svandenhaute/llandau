@@ -77,7 +77,7 @@ class Deck(Scene):
         marks the upcoming step; otherwise it also ends the current one.
 
         view     settings applied when the step starts (see landau.live): camera, frame, style,
-                 sidechains, shading, fog, coloring, scrub_discrete, show, hide
+                 sidechains, shading, fog, occlusion, coloring, scrub_discrete, show, hide
         still    also draw a still image of the view into the region (what exports show; the live
                  view covers it). Returned, e.g. to replace it later; None without.
         """
