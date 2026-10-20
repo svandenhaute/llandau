@@ -32,10 +32,11 @@ landau png slides.py OUT_DIR
 
 ## Install
 
-Wheels for macOS and Linux (Python >= 3.10) are on the GitHub releases:
+Wheels for macOS and Linux (Python >= 3.10) are on the GitHub releases. Pin the version:
+an unrelated `landau` on PyPI has higher version numbers and wins otherwise.
 
 ```
-pip install landau --find-links https://github.com/svandenhaute/landau/releases/expanded_assets/v0.2.0
+pip install landau==0.2.0 --find-links https://github.com/svandenhaute/landau/releases/expanded_assets/v0.2.0
 ```
 
 or build it (needs Rust): `pip install maturin && maturin develop --release`
