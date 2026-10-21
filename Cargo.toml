@@ -1,6 +1,6 @@
 [package]
 name = "llandau"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 description = "Smooth scientific slides drawn live, with interactive 3D views of atomic trajectories"
 license = "MIT"
