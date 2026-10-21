@@ -29,7 +29,7 @@ use crate::plots;
 use crate::recording::{Recording, State};
 use crate::render::{Gpu, Offscreen};
 
-const PANEL_WIDTH: f32 = 300.0;
+pub(crate) const PANEL_WIDTH: f32 = 300.0;
 pub(crate) const PLAY_INTERVAL: Duration = Duration::from_millis(33);
 /// Wheel or trackpad points per frame when scrubbing slowly, for up to this many frames.
 const SCROLL_PER_FRAME: f32 = 12.0;
@@ -582,40 +582,81 @@ impl App<'_> {
             ui.label(info.clone());
             ui.separator();
         }
-        let v = &mut *self.viewer;
-
-        // frames
-        let count = v.num_frames().max(1);
-        let mut frame = v.frame;
-        ui.horizontal(|ui| {
-            ui.label("frame");
-            if ui.add(egui::Slider::new(&mut frame, 0..=count - 1)).changed() {
-                v.set_frame(frame);
-            }
-            hint(ui, "← →");
-        });
-        ui.horizontal(|ui| {
-            if ui.button(if self.playing { "Pause" } else { "Play" }).clicked() {
-                self.playing = !self.playing;
-            }
-            hint(ui, "Space");
-            if v.num_discrete_frames() > 0 {
-                let mut on = v.scene.scrub_discrete;
-                if ui.checkbox(&mut on, "scrub discrete").changed() {
-                    let _ = v.set_scrub_discrete(on);
-                }
-                hint(ui, "D");
-            }
-        });
+        frame_controls(ui, self.viewer, &mut self.playing, "Space");
         self.record_controls(ui);
-        let v = &mut *self.viewer;
+        ui.separator();
+        view_controls(ui, self.viewer, &self.initial_scales, true);
         ui.separator();
 
-        // appearance
-        egui::Grid::new("appearance").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+        // copy buttons
+        let mut copy = None;
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("copy state").on_hover_text("the view as a dict: for live(view=...) in a deck").clicked() {
+                copy = Some(None);
+            }
+            hint(ui, COPY);
+            for (index, (label, _)) in self.options.buttons.iter().enumerate() {
+                if ui.button(label).clicked() {
+                    copy = Some(Some(index));
+                }
+            }
+        });
+        if let Some(which) = copy {
+            self.copy(ui.ctx(), which);
+        }
+        if !self.status.is_empty() {
+            ui.small(&self.status);
+        }
+
+        // plots, unless shown large
+        let x = self.plot_x();
+        let v = &*self.viewer;
+        if !v.show_plots {
+            v.plots.small(ui, x);
+        }
+        ui.add_space(8.0);
+        let large = if v.plots.is_empty() { "" } else { "G large plots · " };
+        ui.label(RichText::new(format!("? keys · {large}H hide panel · F full screen")).small().weak());
+    }
+}
+
+/// The frame row of the panel: the slider, play / pause (its key hinted), discrete states.
+pub(crate) fn frame_controls(ui: &mut egui::Ui, v: &mut Viewer, playing: &mut bool, play_key: &str) {
+    let count = v.num_frames().max(1);
+    let mut frame = v.frame;
+    ui.horizontal(|ui| {
+        ui.label("frame");
+        if ui.add(egui::Slider::new(&mut frame, 0..=count - 1)).changed() {
+            v.set_frame(frame);
+        }
+        hint(ui, ", .");
+    });
+    ui.horizontal(|ui| {
+        if ui.button(if *playing { "Pause" } else { "Play" }).clicked() {
+            *playing = !*playing;
+        }
+        hint(ui, play_key);
+        if v.num_discrete_frames() > 0 {
+            let mut on = v.scene.scrub_discrete;
+            if ui.checkbox(&mut on, "scrub discrete").changed() {
+                let _ = v.set_scrub_discrete(on);
+            }
+            hint(ui, "D");
+        }
+    });
+}
+
+/// The view's settings: appearance, layers and sizes, every one with its key hinted.
+/// `initial_scales`: the vector lengths as given, the top of their sliders being 4 x that;
+/// `theme`: with the theme choice (not in a deck, whose theme is the deck's).
+pub(crate) fn view_controls(ui: &mut egui::Ui, v: &mut Viewer, initial_scales: &[(String, f32)], theme: bool) {
+    ui.spacing_mut().slider_width = 100.0;
+    egui::Grid::new("appearance").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+        if theme {
             choice(ui, "theme", "T", &["light", "dark"], v.theme(), |name| drop(v.set_theme(name)));
             ui.end_row();
-            choice(ui, "shading", "L", &["lit", "flat"], v.shading(), |s| drop(v.set_shading(s)));
+        }
+        choice(ui, "shading", "L", &["lit", "flat"], v.shading(), |s| drop(v.set_shading(s)));
             ui.end_row();
             if v.has_roles() {
                 choice(ui, "style", "S", &["atoms", "protein"], v.style(), |s| drop(v.set_style(s)));
@@ -699,7 +740,7 @@ impl App<'_> {
             });
             ui.end_row();
             for (name, scale) in v.vector_scales() {
-                let initial = self.initial_scales.iter().find(|(n, _)| *n == name).map_or(scale, |(_, s)| *s);
+                let initial = initial_scales.iter().find(|(n, _)| *n == name).map_or(scale, |(_, s)| *s);
                 let mut value = scale;
                 ui.label(format!("{name} length"));
                 if ui.add(egui::Slider::new(&mut value, 0.0..=(4.0 * initial).max(1e-3))).changed() {
@@ -708,39 +749,9 @@ impl App<'_> {
                 ui.end_row();
             }
         });
-        ui.separator();
+}
 
-        // copy buttons
-        let mut copy = None;
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("copy state").on_hover_text("the view as a dict: for live(view=...) in a deck").clicked() {
-                copy = Some(None);
-            }
-            hint(ui, COPY);
-            for (index, (label, _)) in self.options.buttons.iter().enumerate() {
-                if ui.button(label).clicked() {
-                    copy = Some(Some(index));
-                }
-            }
-        });
-        if let Some(which) = copy {
-            self.copy(ui.ctx(), which);
-        }
-        if !self.status.is_empty() {
-            ui.small(&self.status);
-        }
-
-        // plots, unless shown large
-        let x = self.plot_x();
-        let v = &*self.viewer;
-        if !v.show_plots {
-            v.plots.small(ui, x);
-        }
-        ui.add_space(8.0);
-        let large = if v.plots.is_empty() { "" } else { "G large plots · " };
-        ui.label(RichText::new(format!("? keys · {large}H hide panel · F full screen")).small().weak());
-    }
-
+impl App<'_> {
     fn record_controls(&mut self, ui: &mut egui::Ui) {
         let mut toggle = false;
         let mut cancel = false;

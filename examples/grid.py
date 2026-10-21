@@ -1,5 +1,6 @@
 """A grid of live 3D views: trp-cage's NMR models, ten of them side by side; a click
-opens one up for a closer look (drag to turn it), the next click puts it back.
+opens one up for a closer look (drag to turn it, H for the panel of controls, 0 for the
+step's view again), the next click puts it back.
 
     llandau play examples/grid.py       # downloads 1l2y.pdb next to this file the first time
 """

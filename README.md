@@ -53,4 +53,6 @@ key (lit or flat shading, protein or atoms, layers, a light or dark theme); R re
 do into an MP4. A deck shows the same viewer live inside a slide, just as interactive, with
 `self.live("name", R.body.right, camera={"azimuth": 30}, frame=60)`. Several views fit on one step,
 e.g. one per cell of `R.body.grid(2, 5)`, and with `opens=R.body` a click opens a view up for a closer
-look (`examples/grid.py`).
+look (`examples/grid.py`); H shows the explorer's panel over it. Set a view up in the explorer and
+copy its state for `self.live("name", state={...})`, or record what you do there (R, a JSON file) for
+`self.live("name", play="tour.json")`: the deck plays it on the step's clock, scrubbable like the rest.

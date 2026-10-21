@@ -10,6 +10,9 @@
 //! A view with an `opens` rectangle (a cell of a grid) opens up to it on a
 //! click, drawn over the others and taking the keys, and closes on the next
 //! click (a drag still turns it; the double click is then not special).
+//!
+//! H shows the explorer's panel of controls over the right of the focused view
+//! (the open one, else the topmost): the mouse over the panel goes to it.
 
 use std::time::{Duration, Instant};
 
@@ -22,7 +25,7 @@ use crate::Viewer;
 use crate::plots::{self, PLOTS_HEIGHT};
 use crate::recording::{Recording, State as ViewState};
 use crate::render::Gpu;
-use crate::window::{self, PLAY_INTERVAL, Scrub};
+use crate::window::{self, PANEL_WIDTH, PLAY_INTERVAL, Scrub, frame_controls, view_controls};
 
 /// How long the camera takes to move to a step's camera, on the step's clock
 /// (llandau.live.CAMERA_MOVE makes the step last that long).
@@ -54,6 +57,7 @@ pub(crate) const KEYS: &[(&str, &str)] = &[
     ("C", "next coloring"),
     ("1 – 9", "layers"), // replaced by the view's layer names
     ("G", "large plots"),
+    ("H", "the panel of controls"),
     ("?", "these keys"),
     ("", "Slides"),
     ("→  Space", "next step"),
@@ -93,6 +97,8 @@ struct State {
     home: Option<ViewState>,
     playing: bool,
     last_step: Option<Instant>,
+    /// the vector lengths as the scene set them: the panel's sliders go to 4 x that
+    initial_scales: Vec<(String, f32)>,
 }
 
 /// A live span opening up to its `opens` rectangle, or closing again.
@@ -120,6 +126,12 @@ pub struct Lives {
     scrub: Scrub,
     /// the keys shown over the focused view
     help: bool,
+    /// the panel of controls shown over the focused view (H)
+    panel: bool,
+    /// mouse events for the panel, in the overlay's points, until the next draw
+    events: Vec<egui::Event>,
+    /// a press went to the panel: its drag and release do too
+    egui_pressed: bool,
     overlay: Option<Overlay>,
 }
 
@@ -134,11 +146,20 @@ impl Overlay {
         Self { ctx: egui::Context::default(), renderer: window::egui_renderer(gpu, FORMAT) }
     }
 
-    /// Draw `contents` over `view` (`size` pixels); whether egui wants another frame.
-    fn draw(&mut self, gpu: &Gpu, view: &wgpu::TextureView, size: (u32, u32), dark: bool, contents: impl FnMut(&mut egui::Ui)) -> bool {
+    /// Draw `contents` over `view` (`size` pixels), given `events`; whether egui wants another frame.
+    fn draw(
+        &mut self,
+        gpu: &Gpu,
+        view: &wgpu::TextureView,
+        size: (u32, u32),
+        dark: bool,
+        events: Vec<egui::Event>,
+        contents: impl FnMut(&mut egui::Ui),
+    ) -> bool {
         let ppp = size.1 as f32 / OVERLAY_HEIGHT;
         let points = egui::vec2(size.0 as f32, size.1 as f32) / ppp;
-        let mut input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, points)), ..Default::default() };
+        let mut input =
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, points)), events, ..Default::default() };
         input.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(ppp);
         self.ctx.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
         let output = self.ctx.run_ui(input, contents);
@@ -195,6 +216,9 @@ impl Lives {
                 enter.call1(py, (viewer,))?;
             }
             let mut v = viewer.borrow_mut();
+            if state.initial_scales.is_empty() {
+                state.initial_scales = v.vector_scales();
+            }
             let start = ViewState::capture(&v);
             // what the step plays: its recording, or the move to its camera
             let mut recording = None;
@@ -339,17 +363,39 @@ impl Lives {
             let target = self.targets[live.viewer].as_ref().unwrap();
             let mut v = self.viewers[live.viewer].bind(py).borrow_mut();
             let plots = v.show_plots && !v.plots.is_empty();
-            let help = self.help && focused == Some(live.viewer);
+            let is_focused = focused == Some(live.viewer);
+            let help = self.help && is_focused;
+            let panel = self.panel && is_focused;
             // the plots go under the 3D view, which keeps the top
             let viewport = plots.then(|| [0.0, 0.0, pixels.0 as f32, ((1.0 - PLOTS_HEIGHT) * pixels.1 as f32).round()]);
             v.draw_into(&target.view, FORMAT, pixels, viewport);
-            if plots || help {
+            if plots || help || panel {
                 let x = v.plots.x(v.frame, v.num_frames(), v.scene.scrub_discrete);
                 let dark = v.theme() == "dark";
                 let overlay = self.overlay.get_or_insert_with(|| Overlay::new(gpu));
                 let rows = help_rows(&v);
                 let keys: Vec<(&str, &str)> = rows.iter().map(|(k, a)| (k.as_str(), a.as_str())).collect();
-                again |= overlay.draw(gpu, &target.view, pixels, dark, |ui| {
+                let events = if is_focused { std::mem::take(&mut self.events) } else { Vec::new() };
+                let state = &mut self.states[live.viewer];
+                let mut playing = state.playing;
+                let initial_scales = state.initial_scales.clone();
+                again |= overlay.draw(gpu, &target.view, pixels, dark, events, |ui| {
+                    if panel {
+                        egui::Panel::right("live controls")
+                            .exact_size(PANEL_WIDTH)
+                            .resizable(false)
+                            .show_separator_line(false)
+                            .show(ui, |ui| {
+                                egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+                                    ui.set_max_width(PANEL_WIDTH - 24.0);
+                                    frame_controls(ui, &mut v, &mut playing, "P");
+                                    ui.separator();
+                                    view_controls(ui, &mut v, &initial_scales, false);
+                                    ui.add_space(8.0);
+                                    ui.label(egui::RichText::new("? keys · H hide panel · 0 the step's view").small().weak());
+                                });
+                            });
+                    }
                     if plots {
                         v.plots.bottom_panel(ui, x);
                     }
@@ -357,9 +403,28 @@ impl Lives {
                         plots::help(ui, &keys, 15.0);
                     }
                 });
+                state.playing = playing;
             }
         }
+        self.events.clear();
         again
+    }
+
+    /// Where the cursor is in the focused view's panel, in the overlay's points
+    /// (None: no panel there, or the cursor is not over it); `anywhere`: the point
+    /// over the whole view, for a drag that began in the panel.
+    fn panel_point(&self, timeline: &Timeline, time: f64, size: (u32, u32), anywhere: bool) -> Option<egui::Pos2> {
+        if !self.panel {
+            return None;
+        }
+        let span = self.focused_span(timeline, time)?;
+        let (now, _, _) = self.placement(timeline, span);
+        let r = pixel_rect(timeline, size, now);
+        let ppp = r[3] / OVERLAY_HEIGHT;
+        let point = egui::pos2((self.cursor.0 as f32 - r[0]) / ppp, (self.cursor.1 as f32 - r[1]) / ppp);
+        let inside = point.x >= 0.0 && point.y >= 0.0 && point.x <= r[2] / ppp && point.y <= OVERLAY_HEIGHT;
+        let in_panel = inside && point.x >= r[2] / ppp - PANEL_WIDTH;
+        (anywhere || in_panel).then_some(point)
     }
 
     /// The live span under the cursor at `time` (the open one first, then the
@@ -375,19 +440,27 @@ impl Lives {
         })
     }
 
-    /// The live view keys go to: the open one, else the topmost one shown.
-    fn focused(&self, timeline: &Timeline, time: f64) -> Option<usize> {
+    /// The live span keys and the panel go to: the open one, else the topmost one shown.
+    fn focused_span(&self, timeline: &Timeline, time: f64) -> Option<usize> {
         if let Some(open) = &self.open
             && timeline.live_at(time).any(|s| s == open.span)
         {
-            return Some(timeline.lives[open.span].viewer);
+            return Some(open.span);
         }
-        timeline.live_at(time).last().map(|span| timeline.lives[span].viewer)
+        timeline.live_at(time).last()
     }
 
-    pub fn cursor_moved(&mut self, py: Python<'_>, timeline: &Timeline, size: (u32, u32), at: (f64, f64)) -> bool {
+    fn focused(&self, timeline: &Timeline, time: f64) -> Option<usize> {
+        self.focused_span(timeline, time).map(|span| timeline.lives[span].viewer)
+    }
+
+    pub fn cursor_moved(&mut self, py: Python<'_>, timeline: &Timeline, time: f64, size: (u32, u32), at: (f64, f64)) -> bool {
         let (dx, dy) = ((at.0 - self.cursor.0) as f32, (at.1 - self.cursor.1) as f32);
         self.cursor = at;
+        if let Some(point) = self.panel_point(timeline, time, size, self.egui_pressed) {
+            self.events.push(egui::Event::PointerMoved(point));
+            return true;
+        }
         let Some((viewer, pan)) = self.drag else { return false };
         let height = self.targets[viewer]
             .as_ref()
@@ -413,6 +486,22 @@ impl Lives {
         right: bool,
         shift: bool,
     ) -> bool {
+        if !pressed && self.egui_pressed {
+            self.egui_pressed = false;
+            if let Some(pos) = self.panel_point(timeline, time, size, true) {
+                let modifiers = egui::Modifiers { shift, ..Default::default() };
+                self.events.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers });
+            }
+            return true;
+        }
+        if pressed && !right
+            && let Some(pos) = self.panel_point(timeline, time, size, false)
+        {
+            let modifiers = egui::Modifiers { shift, ..Default::default() };
+            self.events.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers });
+            self.egui_pressed = true;
+            return true;
+        }
         if !pressed {
             let dragged = self.drag.take().is_some();
             if let Some((span, at)) = self.press.take() {
@@ -441,8 +530,19 @@ impl Lives {
         true
     }
 
-    /// Scrolling over a live view: frames (or zoom, with ctrl). True when taken.
+    /// Scrolling over a live view: frames (or zoom, with ctrl); over its panel, the panel. True when taken.
     pub fn scroll(&mut self, py: Python<'_>, timeline: &Timeline, time: f64, size: (u32, u32), points: f32, zoom: bool) -> bool {
+        if self.panel_point(timeline, time, size, false).is_some() {
+            let delta = egui::vec2(0.0, points);
+            self.events.push(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta,
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
+                modifiers: Default::default(),
+            });
+            return true;
+        }
         let Some((_, viewer, _)) = self.under(timeline, time, size, self.cursor) else { return false };
         let mut v = self.viewers[viewer].bind(py).borrow_mut();
         if zoom {
@@ -471,6 +571,7 @@ impl Lives {
         match key {
             "p" => state.playing = !state.playing,
             "?" => self.help = !self.help,
+            "h" => self.panel = !self.panel,
             "0" => match &state.home {
                 // the step's view again, the camera included
                 Some(home) => {
@@ -558,6 +659,24 @@ mod tests {
         assert!(lives.open.is_some());
         let active: Vec<usize> = later.live_at(1.0).collect();
         assert!(!active.contains(&2));
+    }
+
+    #[test]
+    fn the_panel_takes_the_right_of_the_focused_view() {
+        let timeline = grid();
+        let mut lives = Lives::default();
+        let size = (1600, 900);
+        lives.toggle(0);
+        lives.open.as_mut().unwrap().since = Instant::now() - OPEN_MOVE;
+        // open to 12 x 8 of the 16 x 9 frame: pixels 200..1400 wide, 50..850 tall; 800 px = 600 points
+        lives.cursor = (1350.0, 450.0);
+        assert!(lives.panel_point(&timeline, 1.0, size, false).is_none(), "no panel yet");
+        lives.panel = true;
+        let point = lives.panel_point(&timeline, 1.0, size, false).expect("over the panel");
+        assert!((point.x - 862.5).abs() < 1e-3 && (point.y - 300.0).abs() < 1e-3);
+        lives.cursor = (300.0, 450.0);
+        assert!(lives.panel_point(&timeline, 1.0, size, false).is_none(), "the view, not its panel");
+        assert!(lives.panel_point(&timeline, 1.0, size, true).is_some(), "a drag from the panel follows");
     }
 
     #[test]

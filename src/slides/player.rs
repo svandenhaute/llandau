@@ -301,7 +301,7 @@ impl ApplicationHandler for App<'_> {
             WindowEvent::KeyboardInput { event, .. } => self.key(event_loop, event),
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
             WindowEvent::CursorMoved { position, .. } => {
-                if self.lives.cursor_moved(self.py, self.timeline, self.size(), (position.x, position.y)) {
+                if self.lives.cursor_moved(self.py, self.timeline, self.time, self.size(), (position.x, position.y)) {
                     self.request_redraw();
                 }
             }

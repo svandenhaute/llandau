@@ -30,9 +30,11 @@ the wheel scrubs it and exports show its end; the step is made long enough for
 it. Their theme is ignored: the deck's applies.
 
 In the player: drag rotates, right drag pans, the wheel scrubs frames, pinch or
-ctrl + wheel zooms, a double click resets the camera; ? over the view shows
-every key (the explorer's, with the arrows still changing steps). Exported
-(llandau pdf), a live step shows a still image of its 3D view (without plots).
+ctrl + wheel zooms, a double click resets the camera, 0 brings the step's view
+back; ? over the view shows every key (the explorer's, with the arrows still
+changing steps) and H the explorer's panel of controls over the view's right.
+Exported (llandau pdf), a live step shows a still image of its 3D view (without
+plots).
 
 Several views on one step: call live() once per region. With opens=R.body a
 click on a view opens it up to the body over the others (a grid of molecules,
