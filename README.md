@@ -1,6 +1,6 @@
 # llandau
 
-Scientific slides drawn live, with interactive geometric models inside them. A deck is
+Clear scientific communication, with support for figures, formulas, and interactive geometric models. A deck is
 written like a [manim](https://www.manim.community) scene and plays straight from the
 code (wgpu): no videos, no render step. Everything on screen is live while you present:
 step back, scrub, turn a molecule, change its rendering. The same plots save as paper
