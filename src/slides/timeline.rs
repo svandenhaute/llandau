@@ -9,7 +9,8 @@
 use std::borrow::Cow;
 
 /// Fill and stroke colors (RGBA, as written: sRGB), the stroke width in
-/// frame units, and how strokes join and end.
+/// frame units, how strokes join and end, and whether each subpath is painted
+/// (fill, then stroke) over the ones before it rather than all fills first.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Style {
     pub fill: [f32; 4],
@@ -17,6 +18,7 @@ pub struct Style {
     pub width: f32,
     pub join: Join,
     pub cap: Cap,
+    pub stacked: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -37,7 +39,7 @@ pub enum Cap {
 
 impl Style {
     /// fill RGBA, stroke RGBA, width; optionally join (0 miter, 1 round,
-    /// 2 bevel) and cap (0 butt, 1 round, 2 square)
+    /// 2 bevel), cap (0 butt, 1 round, 2 square) and stacked (0 or 1)
     pub fn from_array(a: &[f32]) -> Style {
         let join = match a.get(9).map(|v| v.round() as i32) {
             Some(1) => Join::Round,
@@ -49,18 +51,21 @@ impl Style {
             Some(2) => Cap::Square,
             _ => Cap::Butt,
         };
-        Style { fill: [a[0], a[1], a[2], a[3]], stroke: [a[4], a[5], a[6], a[7]], width: a[8], join, cap }
+        let stacked = a.get(11).is_some_and(|v| *v > 0.5);
+        Style { fill: [a[0], a[1], a[2], a[3]], stroke: [a[4], a[5], a[6], a[7]], width: a[8], join, cap, stacked }
     }
 
     fn lerp(&self, other: &Style, t: f32) -> Style {
         let mix = |a: [f32; 4], b: [f32; 4]| std::array::from_fn(|i| a[i] + t * (b[i] - a[i]));
-        let (join, cap) = if t < 0.5 { (self.join, self.cap) } else { (other.join, other.cap) };
+        let (join, cap, stacked) =
+            if t < 0.5 { (self.join, self.cap, self.stacked) } else { (other.join, other.cap, other.stacked) };
         Style {
             fill: mix(self.fill, other.fill),
             stroke: mix(self.stroke, other.stroke),
             width: self.width + t * (other.width - self.width),
             join,
             cap,
+            stacked,
         }
     }
 }
@@ -342,7 +347,7 @@ mod tests {
 
     #[test]
     fn clips_follow_their_windows() {
-        let style = Style { fill: [1.0, 0.0, 0.0, 1.0], stroke: [0.0; 4], width: 0.0, join: Join::Miter, cap: Cap::Butt };
+        let style = Style { fill: [1.0, 0.0, 0.0, 1.0], stroke: [0.0; 4], width: 0.0, join: Join::Miter, cap: Cap::Butt, stacked: false };
         let mut timeline = Timeline { rates: vec![Rate::linear()], ..Default::default() };
         timeline.shapes.push(Shape { points: line([0.0, 0.0], [1.0, 0.0]), style });
         timeline.shapes.push(Shape { points: line([0.0, 1.0], [1.0, 1.0]), style });
@@ -368,7 +373,7 @@ mod tests {
 
     #[test]
     fn write_outlines_then_fills() {
-        let style = Style { fill: [1.0, 0.0, 0.0, 1.0], stroke: [0.0; 4], width: 0.0, join: Join::Miter, cap: Cap::Butt };
+        let style = Style { fill: [1.0, 0.0, 0.0, 1.0], stroke: [0.0; 4], width: 0.0, join: Join::Miter, cap: Cap::Butt, stacked: false };
         let mut timeline = Timeline::default();
         timeline.shapes.push(Shape { points: line([0.0, 0.0], [1.0, 0.0]), style });
         timeline.clips.push(Clip {

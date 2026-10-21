@@ -13,7 +13,7 @@ use lyon::tessellation::{
 };
 use wgpu::util::DeviceExt;
 
-use super::timeline::{Cap, Item, Join, Shape, Timeline};
+use super::timeline::{Cap, Item, Join, Shape, Style, Timeline};
 
 const SAMPLES: u32 = 4;
 /// Supersampling on top of the multisampling: rendered at this many times the size.
@@ -534,12 +534,28 @@ fn build_path(points: &[[f32; 2]]) -> (Path, bool) {
 }
 
 fn tessellate(shape: &Shape, tolerance: f32) -> Mesh {
+    if !shape.style.stacked {
+        return tessellate_path(&shape.points, &shape.style, tolerance);
+    }
+    // each subpath over the ones before it: its fill covers their strokes
+    let mut mesh = Mesh::default();
+    let mut start = 0;
+    for k in (4..shape.points.len()).step_by(4) {
+        if shape.points[k] != shape.points[k - 1] {
+            append(&mut mesh, &tessellate_path(&shape.points[start..k], &shape.style, tolerance));
+            start = k;
+        }
+    }
+    append(&mut mesh, &tessellate_path(&shape.points[start..], &shape.style, tolerance));
+    mesh
+}
+
+fn tessellate_path(points: &[[f32; 2]], style: &Style, tolerance: f32) -> Mesh {
     let mut buffers: VertexBuffers<ShapeVertex, u32> = VertexBuffers::new();
-    let (path, any) = build_path(&shape.points);
+    let (path, any) = build_path(points);
     if !any {
         return Mesh::default();
     }
-    let style = &shape.style;
     if style.fill[3] > 0.0 {
         let color = style.fill;
         let _ = FillTessellator::new().tessellate_path(

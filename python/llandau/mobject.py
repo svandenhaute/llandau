@@ -660,10 +660,11 @@ class VMobject(Mobject):
 
     def __init__(self, color=None, fill_color=None, fill_opacity: float = 0.0, stroke_color=None,
                  stroke_opacity: float = 1.0, stroke_width: float = DEFAULT_STROKE_WIDTH, z_index: float = 0,
-                 joint_type: str = "miter", cap_style: str = "butt", **kwargs):
+                 joint_type: str = "miter", cap_style: str = "butt", stacked: bool = False, **kwargs):
         super().__init__(z_index=z_index)
         self.joint_type = joint_type  # miter, round or bevel
         self.cap_style = cap_style  # butt, round or square
+        self.stacked = stacked  # each subpath painted (fill, then stroke) over the ones before
         color = Color(color) if color is not None else WHITE
         self.fill_color = Color(fill_color) if fill_color is not None else color
         self.fill_opacity = fill_opacity
@@ -761,12 +762,13 @@ class VMobject(Mobject):
         return self
 
     def style_array(self) -> np.ndarray:
-        """fill RGBA, stroke RGBA, stroke width in frame units, join, cap (the renderer's style)."""
+        """fill RGBA, stroke RGBA, stroke width in frame units, join, cap, stacked (the renderer's style)."""
         return np.concatenate([
             self.fill_color.rgb, [self.fill_color.alpha * self.fill_opacity],
             self.stroke_color.rgb, [self.stroke_color.alpha * self.stroke_opacity],
             [0.01 * self.stroke_width,
-             _JOINS.get(getattr(self, "joint_type", "miter"), 0), _CAPS.get(getattr(self, "cap_style", "butt"), 0)],
+             _JOINS.get(getattr(self, "joint_type", "miter"), 0), _CAPS.get(getattr(self, "cap_style", "butt"), 0),
+             float(getattr(self, "stacked", False))],
         ]).astype(np.float32)
 
     # --- points ------------------------------------------------------------------

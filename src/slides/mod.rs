@@ -72,13 +72,13 @@ impl Slides {
 
     /// A shape: cubic Bézier control points (4 per curve, (n, 2), frame
     /// units, y up) and its style: fill RGBA, stroke RGBA, stroke width, and
-    /// optionally join (0 miter, 1 round, 2 bevel) and cap (0 butt, 1 round,
-    /// 2 square).
+    /// optionally join (0 miter, 1 round, 2 bevel), cap (0 butt, 1 round,
+    /// 2 square) and stacked (1: each subpath painted over the ones before).
     /// Returns its id.
     fn add_shape(&mut self, points: PyReadonlyArray2<f32>, style: PyReadonlyArray1<f32>) -> PyResult<usize> {
         let style = style.as_slice()?;
-        if style.len() != 9 && style.len() != 11 {
-            return Err(value_error("style: fill RGBA, stroke RGBA, stroke width (and join, cap)"));
+        if ![9, 11, 12].contains(&style.len()) {
+            return Err(value_error("style: fill RGBA, stroke RGBA, stroke width (and join, cap, stacked)"));
         }
         let points = control_points(&points)?;
         self.timeline.shapes.push(Shape { points, style: Style::from_array(style) });

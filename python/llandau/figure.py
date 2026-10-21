@@ -265,7 +265,8 @@ def to_svg(mobjects, bounds, background: str | None = None) -> str:
                 attrs.append('stroke-miterlimit="10"')
             if cap != "butt":
                 attrs.append(f'stroke-linecap="{cap}"')
-        out.append(f'<path d="{_path_data(m.points, x0, y1)}" {" ".join(attrs)}/>')
+        for points in m.get_subpaths() if getattr(m, "stacked", False) else [m.points]:
+            out.append(f'<path d="{_path_data(points, x0, y1)}" {" ".join(attrs)}/>')
     out.append("</svg>")
     return "\n".join(out)
 
