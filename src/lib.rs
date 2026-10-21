@@ -353,17 +353,38 @@ impl Viewer {
 
     /// Discrete states of the same atoms, (states, atoms, 3), to scrub through
     /// instead of the path frames with `scrub_discrete`. None removes them.
-    #[pyo3(signature = (positions = None))]
-    fn set_discrete_frames(&mut self, positions: Option<PyReadonlyArrayDyn<f32>>) -> PyResult<()> {
-        let num_atoms = self.structure()?.num_atoms;
+    /// `path_frames`: the path frame (fractional) each state corresponds to, which
+    /// places the trails and the plots' cursor; without, the states are spread evenly
+    /// over the path.
+    #[pyo3(signature = (positions = None, path_frames = None))]
+    fn set_discrete_frames(
+        &mut self,
+        positions: Option<PyReadonlyArrayDyn<f32>>,
+        path_frames: Option<Vec<f32>>,
+    ) -> PyResult<()> {
+        let (num_atoms, num_frames) = {
+            let s = self.structure()?;
+            (s.num_atoms, s.num_frames())
+        };
         let discrete = positions.map(|p| points(&p, "positions")).transpose()?;
         if let Some(d) = &discrete
             && (d.is_empty() || d.len() % num_atoms != 0)
         {
             return Err(value_error(format!("discrete frames: expected (states, {num_atoms}, 3)")));
         }
+        if let Some(frames) = &path_frames {
+            let states = discrete.as_ref().map_or(0, |d| d.len() / num_atoms);
+            if frames.len() != states {
+                return Err(value_error(format!("path_frames: {} values for {states} states", frames.len())));
+            }
+            let last = (num_frames.max(1) - 1) as f32;
+            if frames.iter().any(|f| !f.is_finite() || *f < 0.0 || *f > last) {
+                return Err(value_error(format!("path_frames: every value must be within 0 and {last}")));
+            }
+        }
         let structure = self.scene.structure.as_mut().unwrap();
         structure.discrete = discrete;
+        structure.discrete_frames = path_frames;
         if structure.discrete.is_none() {
             self.scene.scrub_discrete = false;
         }
@@ -478,6 +499,15 @@ impl Viewer {
         structure.backbone_colors = colors;
         self.changed(LOOK);
         Ok(())
+    }
+
+    /// Where the plots' cursor is: the path parameter of the current frame (of the discrete
+    /// state's path frame with scrub_discrete).
+    pub(crate) fn plot_x(&self) -> f64 {
+        match &self.scene.structure {
+            Some(s) => self.plots.x(self.scene.path_frame(s, self.frame)),
+            None => self.frame as f64,
+        }
     }
 
     /// Frames that `frame` walks: the path frames, or the discrete states with scrub_discrete.

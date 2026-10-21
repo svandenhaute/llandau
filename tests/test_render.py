@@ -88,6 +88,21 @@ def test_ghost_and_discrete(viewer):
     assert drawn(viewer.render_image(160, 120)) > 0.01
 
 
+def test_discrete_states_at_their_own_path_frames(viewer):
+    """Discrete states may say which path frame they are at (fractional), for the trails
+    and the plots' cursor; the list must match the states and stay within the path."""
+    viewer.set_discrete_frames(POSITIONS[::2], path_frames=[0, 0.5, 4])
+    viewer.scrub_discrete = True
+    assert viewer.num_frames == 3
+    assert drawn(viewer.render_image(160, 120)) > 0.01
+    with pytest.raises(ValueError):
+        viewer.set_discrete_frames(POSITIONS[::2], path_frames=[0, 1])
+    with pytest.raises(ValueError):
+        viewer.set_discrete_frames(POSITIONS[::2], path_frames=[0, 1, 4.5])
+    viewer.set_discrete_frames(None)
+    assert not viewer.scrub_discrete
+
+
 def test_flat_shading(viewer):
     lit = viewer.render_image(160, 120)
     viewer.shading = "flat"

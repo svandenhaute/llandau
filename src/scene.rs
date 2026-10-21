@@ -85,6 +85,8 @@ pub struct Structure {
     pub excluded: HashSet<(u32, u32)>,
     /// discrete states of the same atoms (frame-major), an alternative to scrub through
     pub discrete: Option<Vec<Vec3>>,
+    /// the path frame (fractional) each discrete state corresponds to; None: spread evenly
+    pub discrete_frames: Option<Vec<f32>>,
     /// element colors per theme (light, dark), swapped in on a theme change
     pub theme_colors: [Option<Vec<Rgba>>; 2],
     /// every atom; the heavy atoms (all, without roles); the CAs in residue order
@@ -123,6 +125,7 @@ impl Structure {
             chains,
             excluded,
             discrete: None,
+            discrete_frames: None,
             theme_colors: [None, None],
             all,
             heavy,
@@ -356,15 +359,31 @@ impl Scene {
         clash::find(positions, &s.vdw, self.drawn_atoms(s), &s.excluded, self.clash_overlap)
     }
 
-    /// Positions of `frame` and the path frame it corresponds to: with
-    /// `scrub_discrete`, the discrete states are spread evenly over the path.
+    /// The path frame (fractional) that `frame` corresponds to: with `scrub_discrete`, the
+    /// discrete state's own path frame when set_discrete_frames gave them, else the states
+    /// spread evenly over the path.
+    pub fn path_frame(&self, s: &Structure, frame: usize) -> f32 {
+        match (&s.discrete, self.scrub_discrete) {
+            (Some(_), true) => {
+                let count = s.num_discrete_frames();
+                let frame = frame.min(count.saturating_sub(1));
+                match &s.discrete_frames {
+                    Some(frames) => frames[frame],
+                    None => frame as f32 / (count.max(2) - 1) as f32 * (s.num_frames() - 1) as f32,
+                }
+            }
+            _ => frame as f32,
+        }
+    }
+
+    /// Positions of `frame` and the path frame it corresponds to (see path_frame).
     pub fn frame_positions<'a>(&self, s: &'a Structure, frame: usize) -> (&'a [Vec3], Option<usize>) {
         match (&s.discrete, self.scrub_discrete) {
             (Some(discrete), true) => {
                 let count = s.num_discrete_frames();
                 let frame = frame.min(count.saturating_sub(1));
-                let path = (frame as f32 / (count.max(2) - 1) as f32 * (s.num_frames() - 1) as f32).round();
-                (&discrete[frame * s.num_atoms..(frame + 1) * s.num_atoms], Some(path as usize))
+                let path = self.path_frame(s, frame).round() as usize;
+                (&discrete[frame * s.num_atoms..(frame + 1) * s.num_atoms], Some(path))
             }
             _ => (s.frame(frame), None),
         }

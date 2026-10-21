@@ -76,8 +76,12 @@ class Viewer(_Viewer):
     def add_points(self, name, positions, colors=None, color=None, radius=0.05, visible=True):
         super().add_points(name, _f32(positions), _f32(colors), color, radius, visible)
 
-    def set_discrete_frames(self, positions=None):
-        super().set_discrete_frames(_f32(positions))
+    def set_discrete_frames(self, positions=None, path_frames=None):
+        """Discrete states (states, atoms, 3) that `frame` walks with scrub_discrete. `path_frames`:
+        the path frame (fractional) each state corresponds to, which places the trails and the
+        plots' cursor; without, the states are spread evenly over the path. None removes them."""
+        frames = None if path_frames is None else [float(f) for f in np.asarray(path_frames).ravel()]
+        super().set_discrete_frames(_f32(positions), frames)
 
     def add_coloring(self, name, colors):
         super().add_coloring(name, _f32(colors))

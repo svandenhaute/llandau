@@ -385,7 +385,7 @@ impl Lives {
             let viewport = plots.then(|| [0.0, 0.0, pixels.0 as f32, ((1.0 - PLOTS_HEIGHT) * pixels.1 as f32).round()]);
             v.draw_into(&target.view, FORMAT, pixels, viewport);
             if plots || help || panel {
-                let x = v.plots.x(v.frame, v.num_frames(), v.scene.scrub_discrete);
+                let x = v.plot_x();
                 let dark = v.theme() == "dark";
                 let overlay = self.overlays.entry(live.viewer).or_insert_with(|| Overlay::new(gpu));
                 let rows = help_rows(&v);

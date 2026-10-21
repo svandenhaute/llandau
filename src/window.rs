@@ -940,8 +940,7 @@ impl App<'_> {
 
     /// Where the plots' cursor is: the path parameter of the current frame.
     fn plot_x(&mut self) -> f64 {
-        let v = &*self.viewer;
-        v.plots.x(v.frame, v.num_frames(), v.scene.scrub_discrete)
+        self.viewer.plot_x()
     }
 }
 

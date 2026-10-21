@@ -25,17 +25,18 @@ impl Plots {
         self.curves.is_empty()
     }
 
-    /// The path parameter at `frame` (discrete states spread evenly over the path).
-    pub fn x(&self, frame: usize, num_frames: usize, scrub_discrete: bool) -> f64 {
+    /// The path parameter at a (fractional) path frame (see Scene::path_frame), interpolated
+    /// between the frames' parameters; the frame itself without `t`.
+    pub fn x(&self, path_frame: f32) -> f64 {
         let t = &self.t;
         if t.is_empty() {
-            return frame as f64;
+            return path_frame as f64;
         }
-        if scrub_discrete {
-            let fraction = frame as f64 / (num_frames.max(2) - 1) as f64;
-            return t[0] + fraction * (t[t.len() - 1] - t[0]);
-        }
-        t[frame.min(t.len() - 1)]
+        let last = (t.len() - 1) as f64;
+        let frame = (path_frame as f64).clamp(0.0, last);
+        let lo = frame.floor() as usize;
+        let hi = (lo + 1).min(t.len() - 1);
+        t[lo] + (frame - lo as f64) * (t[hi] - t[lo])
     }
 
     /// The panel's plots: each a value and a small plot without axes.
@@ -150,9 +151,10 @@ mod tests {
     #[test]
     fn the_cursor_follows_the_frame() {
         let plots = Plots { curves: vec![], t: vec![0.0, 0.5, 2.0] };
-        assert_eq!(plots.x(1, 3, false), 0.5);
-        assert_eq!(plots.x(1, 3, true), 1.0); // discrete states spread evenly over the path
-        assert_eq!(Plots::default().x(7, 10, false), 7.0);
+        assert_eq!(plots.x(1.0), 0.5);
+        assert_eq!(plots.x(1.5), 1.25); // a discrete state between two path frames
+        assert_eq!(plots.x(9.0), 2.0); // past the last frame
+        assert_eq!(Plots::default().x(7.0), 7.0);
         assert_eq!(interpolate(&[0.0, 1.0], &[2.0, 4.0], 0.25), 2.5);
     }
 
