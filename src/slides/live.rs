@@ -266,7 +266,7 @@ impl Lives {
         painter.live_top = None;
         for span in timeline.live_at(time).collect::<Vec<_>>() {
             let live = timeline.lives[span];
-            let (now, heading, moving) = self.placement(timeline, span);
+            let (now, _, moving) = self.placement(timeline, span);
             again |= moving;
             if now == live.rect {
                 painter.live_rects.remove(&live.viewer);
@@ -281,7 +281,6 @@ impl Lives {
                 }
             }
             // drawn at the size it has now: a picture of another aspect ratio would stretch
-            let _ = heading;
             let rect = pixel_rect(timeline, size, now);
             let pixels = (rect[2].round().max(1.0) as u32, rect[3].round().max(1.0) as u32);
             if !matches!(&self.targets[live.viewer], Some(t) if t.size == pixels) {
