@@ -21,8 +21,9 @@ use std::time::{Duration, Instant};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use super::paint::{Painter, letterbox};
+use super::paint::Painter;
 use super::timeline::Timeline;
+use super::zoom::Zoom;
 use crate::Viewer;
 use crate::plots::{self, PLOTS_HEIGHT};
 use crate::recording::{Recording, State as ViewState};
@@ -66,6 +67,8 @@ pub(crate) const KEYS: &[(&str, &str)] = &[
     ("←", "previous step"),
     ("Home  End", "first / last step"),
     ("R", "replay the step"),
+    ("Cmd wheel", "zoom the slide (pinch too; over a 3D view: its camera)"),
+    ("Cmd =  −  0", "zoom the slide in / out / whole; drag the slide to pan"),
     ("F", "full screen"),
     ("Esc  Q", "leave full screen, quit"),
 ];
@@ -138,6 +141,8 @@ pub struct Lives {
     hovered: Option<usize>,
     /// the window's size at the last mouse event, to place the cursor
     size: (u32, u32),
+    /// the slide's zoom (the player's): the views are placed through it
+    pub zoom: Zoom,
     /// egui over each viewer's picture: one context each, so that a press handled over
     /// one view is not taken up by the next view's pass (as a drag of its plot)
     overlays: HashMap<usize, Overlay>,
@@ -353,7 +358,7 @@ impl Lives {
                 }
                 state.applied = Some(time);
             }
-            let rect = pixel_rect(timeline, size, now);
+            let rect = self.pixel_rect(timeline, size, now);
             let pixels = (rect[2].round().max(1.0) as u32, rect[3].round().max(1.0) as u32);
             if !matches!(&self.targets[live.viewer], Some(t) if t.size == pixels) {
                 let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
@@ -438,7 +443,7 @@ impl Lives {
         }
         let span = self.focused_span(timeline, time)?;
         let (now, _, _) = self.placement(timeline, span);
-        let r = pixel_rect(timeline, size, now);
+        let r = self.pixel_rect(timeline, size, now);
         let ppp = r[3] / OVERLAY_HEIGHT;
         let point = egui::pos2((self.cursor.0 as f32 - r[0]) / ppp, (self.cursor.1 as f32 - r[1]) / ppp);
         let inside = point.x >= 0.0 && point.y >= 0.0 && point.x <= r[2] / ppp && point.y <= OVERLAY_HEIGHT;
@@ -453,7 +458,7 @@ impl Lives {
         let rest = timeline.live_at(time).rev().filter(|&s| Some(s) != open);
         open.into_iter().chain(rest).find_map(|span| {
             let (now, _, _) = self.placement(timeline, span);
-            let r = pixel_rect(timeline, size, now);
+            let r = self.pixel_rect(timeline, size, now);
             let (x, y) = (at.0 as f32, at.1 as f32);
             (x >= r[0] && x <= r[0] + r[2] && y >= r[1] && y <= r[1] + r[3]).then_some((span, timeline.lives[span].viewer, r))
         })
@@ -502,7 +507,7 @@ impl Lives {
         let height = self.targets[viewer]
             .as_ref()
             .map(|t| t.size.1 as f32)
-            .unwrap_or_else(|| pixel_rect(timeline, size, [0.0, 0.0, 1.0, 1.0])[3]);
+            .unwrap_or_else(|| self.pixel_rect(timeline, size, [0.0, 0.0, 1.0, 1.0])[3]);
         let mut v = self.viewers[viewer].bind(py).borrow_mut();
         if pan {
             v.pan(dx, dy, height);
@@ -642,15 +647,15 @@ fn help_rows(v: &Viewer) -> Vec<(String, String)> {
         .collect()
 }
 
-/// A frame rectangle (center, width, height) in pixels of a target of `size`:
-/// left, top, width, height.
-pub fn pixel_rect(timeline: &Timeline, size: (u32, u32), rect: [f32; 4]) -> [f32; 4] {
-    let [vx, vy, vw, vh] = letterbox(timeline.frame, size);
-    let [fw, fh] = timeline.frame;
-    let [cx, cy, w, h] = rect;
-    let left = vx + (cx - w / 2.0 + fw / 2.0) / fw * vw;
-    let top = vy + (fh / 2.0 - (cy + h / 2.0)) / fh * vh;
-    [left, top, w / fw * vw, h / fh * vh]
+impl Lives {
+    /// A frame rectangle (center, width, height) in pixels of a target of `size`,
+    /// through the zoom: left, top, width, height.
+    fn pixel_rect(&self, timeline: &Timeline, size: (u32, u32), rect: [f32; 4]) -> [f32; 4] {
+        let [cx, cy, w, h] = rect;
+        let [left, top] = self.zoom.pixel_of(timeline.frame, size, [cx - w / 2.0, cy + h / 2.0]);
+        let [right, bottom] = self.zoom.pixel_of(timeline.frame, size, [cx + w / 2.0, cy - h / 2.0]);
+        [left, top, right - left, bottom - top]
+    }
 }
 
 #[cfg(test)]

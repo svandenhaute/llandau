@@ -17,6 +17,7 @@ use lyon::tessellation::{
 use wgpu::util::DeviceExt;
 
 use super::timeline::{Cap, Item, Join, Shape, Style, Timeline};
+use super::zoom::Zoom;
 use crate::render::GpuBuffer;
 
 const SAMPLES: u32 = 4;
@@ -51,9 +52,12 @@ struct ImageVertex {
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct FrameUniform {
+    /// frame units to clip space, the zoom included
     scale: [f32; 2],
+    /// the frame point drawn at the middle (the zoom's center)
+    offset: [f32; 2],
     srgb: f32,
-    _pad: f32,
+    _pad: [f32; 3],
 }
 
 #[derive(Default)]
@@ -370,7 +374,7 @@ impl Painter {
     }
 
     /// Draw `timeline` at `time` into `target` (`size` pixels, in `format`),
-    /// letterboxed to the frame's aspect ratio. `images` are the timeline's.
+    /// letterboxed to the frame's aspect ratio, magnified by `zoom`. `images` are the timeline's.
     #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
@@ -382,6 +386,7 @@ impl Painter {
         target: &wgpu::TextureView,
         format: wgpu::TextureFormat,
         size: (u32, u32),
+        zoom: &Zoom,
     ) {
         self.upload_images(device, queue, images);
         let viewport = letterbox(timeline.frame, size);
@@ -406,7 +411,8 @@ impl Painter {
         // the open layer run: (layer, opacity, first index)
         let mut open: Option<(usize, f32, u32)> = None;
         let mut top: Option<Command> = None; // the open live view: drawn last
-        let whole = [0.0, 0.0, timeline.frame[0], timeline.frame[1]];
+        // a layer's picture covers the viewport: in frame units, the part of the frame shown
+        let whole = [zoom.center[0], zoom.center[1], timeline.frame[0] / zoom.scale, timeline.frame[1] / zoom.scale];
         let close = |open: &mut Option<(usize, f32, u32)>, end: u32, quads: &mut Vec<ImageVertex>, commands: &mut Vec<Command>| {
             if let Some((_, opacity, start)) = open.take() {
                 let first = quad(quads, whole, opacity);
@@ -472,7 +478,12 @@ impl Painter {
             self.ensure_targets(device, inner, true);
         }
 
-        let frame = FrameUniform { scale: [2.0 / timeline.frame[0], 2.0 / timeline.frame[1]], srgb: 0.0, _pad: 0.0 };
+        let frame = FrameUniform {
+            scale: [2.0 / timeline.frame[0] * zoom.scale, 2.0 / timeline.frame[1] * zoom.scale],
+            offset: zoom.center,
+            srgb: 0.0,
+            _pad: [0.0; 3],
+        };
         queue.write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&frame));
         let srgb = if format.is_srgb() { 1.0 } else { 0.0 };
         queue.write_buffer(&self.blit_frame_buffer, 0, bytemuck::bytes_of(&FrameUniform { srgb, ..frame }));

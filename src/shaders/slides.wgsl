@@ -3,11 +3,14 @@
 // cairo does); then downsampled from the supersampled target.
 
 struct Frame {
-    // frame units to clip space
+    // frame units to clip space (the zoom included)
     scale: vec2<f32>,
+    // the frame point at the middle of the viewport (the zoom's center)
+    offset: vec2<f32>,
     // 1 when the final target decodes sRGB (blit only)
     srgb: f32,
-    _pad: f32,
+    _pad0: f32,
+    _pad1: vec2<f32>,
 };
 @group(0) @binding(0) var<uniform> frame: Frame;
 
@@ -19,7 +22,7 @@ struct ShapeOut {
 @vertex
 fn shape_vs(@location(0) position: vec2<f32>, @location(1) color: vec4<f32>) -> ShapeOut {
     var out: ShapeOut;
-    out.clip = vec4(position * frame.scale, 0.0, 1.0);
+    out.clip = vec4((position - frame.offset) * frame.scale, 0.0, 1.0);
     out.color = color;
     return out;
 }
@@ -41,7 +44,7 @@ struct ImageOut {
 @vertex
 fn image_vs(@location(0) position: vec2<f32>, @location(1) uv: vec2<f32>, @location(2) opacity: f32) -> ImageOut {
     var out: ImageOut;
-    out.clip = vec4(position * frame.scale, 0.0, 1.0);
+    out.clip = vec4((position - frame.offset) * frame.scale, 0.0, 1.0);
     out.uv = uv;
     out.opacity = opacity;
     return out;

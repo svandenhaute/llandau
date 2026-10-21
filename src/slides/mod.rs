@@ -6,6 +6,7 @@ pub mod live;
 pub mod paint;
 pub mod player;
 pub mod svg;
+pub mod zoom;
 pub mod timeline;
 
 use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyUntypedArrayMethods};
@@ -251,7 +252,7 @@ impl Slides {
         self.gpu()?;
         let (gpu, painter) = self.gpu.as_mut().unwrap();
         let target = Offscreen::ensure(&mut self.offscreen, &gpu.device, size, FORMAT);
-        painter.draw(&gpu.device, &gpu.queue, &self.timeline, &self.images, time, target.view(), FORMAT, size);
+        painter.draw(&gpu.device, &gpu.queue, &self.timeline, &self.images, time, target.view(), FORMAT, size, &zoom::Zoom::default());
         let pixels = target.read(gpu);
         Ok(PyArray1::from_vec(py, pixels).reshape([size.1 as usize, size.0 as usize, 4])?.into_any())
     }

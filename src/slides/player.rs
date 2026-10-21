@@ -5,6 +5,9 @@
 //! R replays the step, F toggles full screen, Escape leaves full screen or
 //! closes, Q closes. Scrolling scrubs through time, faster when scrolling fast.
 //! Over a live 3D view, the mouse and some keys go to it (see `live`; ? shows them).
+//! Cmd (Ctrl) + wheel or a pinch zooms the slide around the cursor (over a live
+//! view: that view's camera, as before), Cmd + = - 0 zoom in, out and back to the
+//! whole slide, and a drag on the slide pans it while zoomed.
 
 use std::time::Instant;
 
@@ -20,6 +23,7 @@ use winit::window::{Fullscreen, WindowId};
 use super::live::Lives;
 use super::paint::{Image, Painter};
 use super::timeline::Timeline;
+use super::zoom::Zoom;
 use crate::render::{Gpu, Offscreen};
 use crate::window::{self, Surface};
 
@@ -67,6 +71,10 @@ struct App<'a> {
     closing: bool,
     error: Option<PyErr>,
     driver: Option<Driver>,
+    zoom: Zoom,
+    cursor: (f64, f64),
+    /// dragging the zoomed slide: the cursor at the last move
+    panning: Option<(f64, f64)>,
 }
 
 pub fn play(
@@ -96,6 +104,9 @@ pub fn play(
             last_scroll: Instant::now(),
             closing: false,
             error: None,
+            zoom: Zoom::default(),
+            cursor: (0.0, 0.0),
+            panning: None,
             driver: std::env::var("LLANDAU_DRIVE").ok().and_then(|path| {
                 let text = std::fs::read_to_string(&path).ok()?;
                 Some(Driver { commands: text.lines().map(String::from).collect(), next: 0, due: Instant::now() })
@@ -169,7 +180,16 @@ impl App<'_> {
         self.step = self.timeline.marks.iter().position(|m| m.time - REST_BEFORE_MARK >= self.time - 1e-9).unwrap_or(self.last_step());
     }
 
+    /// Magnify the slide by `factor` around the cursor.
+    fn zoom_by(&mut self, factor: f32) {
+        let size = self.size();
+        self.zoom.zoom_at(self.timeline.frame, size, self.cursor, factor);
+        self.lives.zoom = self.zoom;
+        self.request_redraw();
+    }
+
     fn redraw(&mut self) {
+        self.lives.zoom = self.zoom;
         if let Some((started, from, target)) = self.playing {
             self.time = (from + started.elapsed().as_secs_f64()).min(target);
             if self.time >= target {
@@ -194,6 +214,7 @@ impl App<'_> {
                 offscreen.view(),
                 target.config.format,
                 size,
+                &self.zoom,
             );
             let pixels = offscreen.read(self.gpu);
             if let Err(error) = crate::window::save_png(&path, size, target.config.format, &pixels) {
@@ -217,6 +238,7 @@ impl App<'_> {
             &view,
             target.config.format,
             size,
+            &self.zoom,
         );
         self.gpu.queue.present(texture);
         if self.playing.is_some() || live_moving || overlay_settling {
@@ -226,6 +248,7 @@ impl App<'_> {
 
     /// A PNG of the window as it is now.
     fn snapshot(&mut self, path: &str) {
+        self.lives.zoom = self.zoom;
         if let Err(error) = self.lives.enter(self.py, self.timeline, self.time) {
             self.error = Some(error);
         }
@@ -234,7 +257,7 @@ impl App<'_> {
         let format = target.config.format;
         self.lives.draw(self.py, self.gpu, self.painter, self.timeline, self.time, size);
         let offscreen = Offscreen::with_format(&self.gpu.device, size, format);
-        self.painter.draw(&self.gpu.device, &self.gpu.queue, self.timeline, self.images, self.time, offscreen.view(), format, size);
+        self.painter.draw(&self.gpu.device, &self.gpu.queue, self.timeline, self.images, self.time, offscreen.view(), format, size, &self.zoom);
         let pixels = offscreen.read(self.gpu);
         if let Err(error) = crate::window::save_png(path, size, format, &pixels) {
             self.error = Some(crate::runtime_error(error));
@@ -258,7 +281,8 @@ impl App<'_> {
         let number = |i: usize| words.get(i).and_then(|w| w.parse::<f64>().ok()).unwrap_or(0.0);
         match words.first().copied() {
             Some("move") => {
-                self.lives.cursor_moved(self.py, self.timeline, self.time, size, (number(1), number(2)));
+                self.cursor = (number(1), number(2));
+                self.lives.cursor_moved(self.py, self.timeline, self.time, size, self.cursor);
             }
             Some(b @ ("press" | "release" | "rpress" | "rrelease")) => {
                 self.lives.button(self.py, self.timeline, self.time, size, b.ends_with("press"), b.starts_with('r'), false);
@@ -286,6 +310,7 @@ impl App<'_> {
                     driver.due = Instant::now() + std::time::Duration::from_millis(number(1) as u64);
                 }
             }
+            Some("zoom") => self.zoom_by(number(1) as f32),
             Some("shot") => self.snapshot(words.get(1).copied().unwrap_or("shot.png")),
             Some("quit") => self.closing = true,
             _ => {}
@@ -304,6 +329,21 @@ impl App<'_> {
     fn on_key(&mut self, event_loop: &ActiveEventLoop, key: Key<&str>) {
         let Some(target) = self.surface.as_ref() else { return };
         let window = target.window.clone();
+        if (self.modifiers.super_key() || self.modifiers.control_key())
+            && let Key::Character(c) = key
+        {
+            match c {
+                "=" | "+" => self.zoom_by(1.25),
+                "-" | "_" => self.zoom_by(0.8),
+                "0" => {
+                    self.zoom = Zoom::default();
+                    self.lives.zoom = self.zoom;
+                    window.request_redraw();
+                }
+                _ => return,
+            }
+            return;
+        }
         if let Key::Character(c) = key {
             let shift = self.modifiers.shift_key();
             if self.lives.key(self.py, self.timeline, self.time, &c.to_lowercase(), shift) {
@@ -391,8 +431,19 @@ impl ApplicationHandler for App<'_> {
             WindowEvent::KeyboardInput { event, .. } => self.key(event_loop, event),
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
             WindowEvent::CursorMoved { position, .. } => {
-                if self.lives.cursor_moved(self.py, self.timeline, self.time, self.size(), (position.x, position.y)) {
+                let at = (position.x, position.y);
+                if let Some(last) = self.panning {
+                    let size = self.size();
+                    self.zoom.pan(self.timeline.frame, size, at.0 - last.0, at.1 - last.1);
+                    self.lives.zoom = self.zoom;
+                    self.panning = Some(at);
+                    self.cursor = at;
                     self.request_redraw();
+                } else {
+                    self.cursor = at;
+                    if self.lives.cursor_moved(self.py, self.timeline, self.time, self.size(), at) {
+                        self.request_redraw();
+                    }
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
@@ -401,11 +452,18 @@ impl ApplicationHandler for App<'_> {
                 let shift = self.modifiers.shift_key();
                 if self.lives.button(self.py, self.timeline, self.time, self.size(), pressed, right, shift) {
                     self.request_redraw();
+                } else if pressed && !right && self.zoom.scale > 1.0 {
+                    self.panning = Some(self.cursor); // a drag on the slide pans it
+                }
+                if !pressed {
+                    self.panning = None;
                 }
             }
             WindowEvent::PinchGesture { delta, .. } => {
                 if self.lives.pinch(self.py, self.timeline, self.time, self.size(), delta) {
                     self.request_redraw();
+                } else {
+                    self.zoom_by(1.0 + delta as f32);
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -416,8 +474,12 @@ impl ApplicationHandler for App<'_> {
                 let zoom = self.modifiers.control_key() || self.modifiers.super_key();
                 let size = self.size();
                 if !self.lives.scroll(self.py, self.timeline, self.time, size, points as f32, zoom) {
-                    // scrolling down (negative) goes forward in time
-                    self.scrub(-points);
+                    if zoom {
+                        self.zoom_by((points as f32 * 0.004).exp());
+                    } else {
+                        // scrolling down (negative) goes forward in time
+                        self.scrub(-points);
+                    }
                 }
                 self.request_redraw();
             }
