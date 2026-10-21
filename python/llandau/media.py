@@ -3,8 +3,12 @@
 Layered SVGs are split at render time (and cached), so the .svg is the only source of truth.
 
 Layer conventions:
-  - steps are ordered by the first number in the layer label ("Layer 3", "2 arrows");
-    layers sharing a number appear together. order="document" uses stacking order instead.
+  - a layer is an Inkscape layer (inkscape:groupmode="layer", named by inkscape:label), or in a
+    plain SVG a top-level <g> with a data-name (how Illustrator, VectorCraft, ... save layers).
+  - steps are ordered by the number that starts the layer label, with an optional letter for
+    sub-steps: "1 axes", "1a line", "1b legend", "2 arrows", ..., "10", "11" (so "11" is step
+    eleven, not a sub-step of 1). Layers sharing a key appear together. order="document" uses
+    stacking order instead.
   - visibility saved in the file is ignored: every layer is shown eventually.
   - layers whose label starts with "_" are skipped (guides, drafts).
 """
@@ -25,7 +29,7 @@ from .shapes import Rectangle
 
 from .layout import Region, place
 
-__all__ = ["image", "svg", "layered_svg", "svg_layers", "CACHE_DIR"]
+__all__ = ["image", "svg", "layered_svg", "svg_layers", "step_key", "CACHE_DIR"]
 
 SVG_NS = "http://www.w3.org/2000/svg"
 INK_NS = "http://www.inkscape.org/namespaces/inkscape"
@@ -80,15 +84,23 @@ class Layer:
 
 
 def svg_layers(path) -> list[Layer]:
-    """Top-level Inkscape layers of an SVG, in document order."""
+    """Top-level layers of an SVG, in document order."""
     root = ET.parse(str(path)).getroot()
-    return [Layer(el.get("id") or f"_layer{i}", el.get(LABEL) or "") for i, el in enumerate(_top_layers(root))]
+    return [Layer(el.get("id") or f"_layer{i}", _label(el)) for i, el in enumerate(_top_layers(root))]
+
+
+def _is_layer(el) -> bool:
+    return el.get(GROUPMODE) == "layer" or (el.tag == f"{{{SVG_NS}}}g" and el.get("data-name") is not None)
+
+
+def _label(el) -> str:
+    return el.get(LABEL) or el.get("data-name") or ""
 
 
 def _top_layers(el):
     """Layer elements not nested inside another layer."""
     for child in el:
-        if child.get(GROUPMODE) == "layer":
+        if _is_layer(child):
             yield child
         else:
             yield from _top_layers(child)
@@ -105,13 +117,24 @@ def _steps(layers: list[Layer], order: str, select) -> list[list[Layer]]:
         raise ValueError(f"order must be 'label' or 'document', not {order!r}")
     keyed = {}
     for l in layers:
-        m = re.search(r"\d+", l.label)
-        if m is None:
+        key = step_key(l.label)
+        if key is None:
             raise ValueError(
-                f"layer {l.label!r} has no number in its label; number it or use order='document'"
+                f"layer {l.label!r} does not start with a number; label it like '3', '3a' or '3 arrows', "
+                "or use order='document'"
             )
-        keyed.setdefault(int(m.group()), []).append(l)
+        keyed.setdefault(key, []).append(l)
     return [keyed[k] for k in sorted(keyed)]
+
+
+_STEP_KEY = re.compile(r"\s*(\d+)([a-z]?)(?![\w])", re.IGNORECASE)
+
+
+def step_key(label: str) -> tuple[int, str] | None:
+    """(number, letter) that orders a layer: "3" -> (3, ""), "3b arrows" -> (3, "b"), "11" -> (11, "").
+    The label must start with the number (a leading "Layer " is allowed); None otherwise."""
+    m = _STEP_KEY.match(label) or _STEP_KEY.match(re.sub(r"^layer[ _-]*", "", label, flags=re.IGNORECASE))
+    return (int(m.group(1)), m.group(2).lower()) if m else None
 
 
 def _visible_only(path, visible: set[str], keep_loose: bool, page_marker: bool = False) -> bytes:
@@ -133,7 +156,7 @@ def _visible_only(path, visible: set[str], keep_loose: bool, page_marker: bool =
     if not keep_loose:
         for child in list(root):
             tag = child.tag.split("}")[-1]
-            if child.get(GROUPMODE) != "layer" and tag not in NON_DRAWING:
+            if not _is_layer(child) and tag not in NON_DRAWING:
                 root.remove(child)
     return ET.tostring(root, xml_declaration=True, encoding="utf-8")
 
@@ -191,6 +214,23 @@ def _rasterize(svg_bytes: bytes, out: Path, dpi: int, renderer: str) -> None:
     tmp.replace(out)  # atomic: a crashed render never leaves a half-written cache entry
 
 
+def _drop_off_page(full, page) -> None:
+    """Remove the paths lying entirely outside the page (scratch objects an editor keeps around
+    the drawing; a viewer clips them away). Paths crossing the page edge are kept whole."""
+    x0, x1 = page.get_left()[0], page.get_right()[0]
+    y0, y1 = page.get_bottom()[1], page.get_top()[1]
+    off = [m for m in full.submobjects
+           if m.get_right()[0] < x0 or m.get_left()[0] > x1 or m.get_top()[1] < y0 or m.get_bottom()[1] > y1]
+    if not off:
+        return
+    gone = {id(m) for m in off}
+    full.remove(*off)
+    for group in full.id_to_vgroup_dict.values():
+        dropped = [m for m in group.submobjects if id(m) in gone]
+        if dropped:
+            group.remove(*dropped)
+
+
 def layered_svg(
     path,
     region: Region | None = None,
@@ -206,8 +246,9 @@ def layered_svg(
     """One mobject per reveal step of an Inkscape SVG, already positioned (Group of steps).
 
     mode        "raster": each step rendered to PNG (full fidelity: text, filters, embedded images);
-                "vector": SVGMobject submobjects (crisp, animatable). Manim's SVG support is limited:
-                <text> is dropped (Inkscape: Path > Object to Path first), no filters/embedded images
+                "vector": SVGMobject submobjects (crisp, animatable): text, clones, markers and clip
+                paths are flattened; no filters or embedded images. Paths entirely off the page are
+                dropped, as a viewer would clip them
     order       "label" (number in layer name) or "document" (stacking order)
     layers      optional subset: indices (after filtering), labels or ids
     accumulate  True: layers build up; False: each step shows only its own layers
@@ -243,6 +284,7 @@ def layered_svg(
             unhidden.write_bytes(_visible_only(path, all_ids, keep_loose=True, page_marker=True))
         full = SVGMobject(str(unhidden))
         groups = full.id_to_vgroup_dict
+        _drop_off_page(full, groups[PAGE_ID])
         if region is not None:
             # place by the page (as raster does), not by the content: objects lying off the page
             # would otherwise shrink the drawing; then move the whole drawing along with it

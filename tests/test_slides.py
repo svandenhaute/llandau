@@ -177,3 +177,67 @@ def test_live_view_spans_its_step():
 
     deck = build([Live])
     assert len(deck.marks) == 3
+
+
+def test_layer_step_keys():
+    """Labels order as number then letter: 1 < 1a < 1b < 2 < 10 < 11, and "11" is not a sub-step of 1."""
+    from llandau.media import step_key, _steps, Layer
+    assert step_key("3") == (3, "")
+    assert step_key("3b arrows") == (3, "b")
+    assert step_key("Layer 11") == (11, "")
+    assert step_key("11") == (11, "")
+    assert step_key("1A") == (1, "a")
+    assert step_key("arrows 3") is None
+    assert step_key("3abc") is None
+    labels = ["11", "2", "1b", "10", "1", "1a", "_guide"]
+    steps = _steps([Layer(f"id{i}", label) for i, label in enumerate(labels)], "label", None)
+    assert [[l.label for l in s] for s in steps] == [["1"], ["1a"], ["1b"], ["2"], ["10"], ["11"]]
+    shared = _steps([Layer("a", "2 boxes"), Layer("b", "2 labels"), Layer("c", "1")], "label", None)
+    assert [[l.label for l in s] for s in shared] == [["1"], ["2 boxes", "2 labels"]]
+
+
+def test_plain_svg_layers(tmp_path):
+    """Top-level <g data-name> groups (Illustrator, VectorCraft) count as layers, as Inkscape layers do."""
+    from llandau.media import svg_layers, _steps
+    path = tmp_path / "plain.svg"
+    path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><title>t</title>'
+        '<g id="Layer_2" data-name="2"><rect width="1" height="1"/></g>'
+        '<g id="Layer_1" data-name="1a"><g data-name="nested"><rect width="2" height="2"/></g></g>'
+        '<g id="wrapper"><g id="Layer_3" data-name="_draft"><rect width="3" height="3"/></g></g>'
+        '<rect width="4" height="4"/></svg>'
+    )
+    layers = svg_layers(path)
+    assert [(l.id, l.label) for l in layers] == [("Layer_2", "2"), ("Layer_1", "1a"), ("Layer_3", "_draft")]
+    assert [[l.id for l in s] for s in _steps(layers, "label", None)] == [["Layer_1"], ["Layer_2"]]
+
+
+def test_vector_layers_drop_off_page(tmp_path):
+    """Scratch objects outside the page are dropped in vector mode; those crossing the edge stay."""
+    from llandau.media import layered_svg
+    path = tmp_path / "offpage.svg"
+    path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+        '<g id="L1" data-name="1"><rect id="inside" x="10" y="10" width="20" height="20"/>'
+        '<rect id="edge" x="90" y="40" width="20" height="20"/>'
+        '<rect id="outside" x="150" y="150" width="20" height="20"/></g></svg>'
+    )
+    steps = layered_svg(path, R.body, mode="vector")
+    assert len(steps) == 1 and [len(layer.submobjects) for layer in steps[0]] == [2]
+
+
+def test_fade_keeps_covering():
+    """A fading opaque shape hides what lies beneath it at every moment: colours fade, not opacity."""
+    class Cover(Scene):
+        def construct(self):
+            self.camera.background_color = "#FFFFFF"
+            dark = Square(color=BLACK, fill_opacity=1, stroke_width=0)
+            light = Square(color="#FFFFFF", fill_opacity=1, stroke_width=0).scale(0.5)
+            self.play(FadeIn(VGroup(dark, light)), run_time=1)
+            self.play(FadeOut(VGroup(dark, light)), run_time=1)
+
+    deck = build([Cover])
+    for time in (0.25, 0.5, 0.75, 1.25, 1.5, 1.75):
+        image = deck.render(time, 320, 180)
+        assert image[90, 160, :3].min() > 250, f"the white square let the dark one through at t={time}"
+    assert ink(deck.render(0.5, 320, 180)) > 0  # the dark square is on its way in

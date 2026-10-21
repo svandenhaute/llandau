@@ -14,7 +14,7 @@ import sys
 import numpy as np
 
 from .mobject import (
-    ORIGIN, PI, TAU, YELLOW, Group, ImageMobject, Mobject, VMobject, OUT,
+    ORIGIN, PI, TAU, YELLOW, Color, Group, ImageMobject, Mobject, VMobject, OUT,
 )
 
 __all__ = [
@@ -550,9 +550,24 @@ class _FromStart(Transform):
             super().finish_native(scene)
 
 
+def _faded(mobject, background):
+    """A copy of mobject as it looks when faded away: drawn parts in the background colour with
+    their opacities kept, so an opaque shape covers what lies beneath it at every moment of the
+    fade (fading the opacity instead lets the parts show through each other); images at opacity 0."""
+    out = mobject.copy()
+    for m in out.get_family():
+        if isinstance(m, VMobject):
+            m.fill_color = Color(background)
+            m.stroke_color = Color(background)
+        elif m is not out:
+            m.fade(1, family=False)
+    return out
+
+
 class _Fade(_FromStart):
     def __init__(self, *mobjects, shift=None, target_position=None, scale: float = 1, **kwargs):
         self._mobjects = mobjects
+        self._background = None  # the scene's, once known
         mobject = mobjects[0] if len(mobjects) == 1 else Group(*mobjects)
         if shift is not None:
             self.shift_vector = np.asarray(shift, dtype=float)
@@ -566,12 +581,19 @@ class _Fade(_FromStart):
         self.scale_factor = scale
         super().__init__(mobject, **kwargs)
 
+    def _setup_scene(self, scene):
+        self._background = scene.camera.background_color
+
+    def faded(self):
+        from . import theme
+        return _faded(self.mobject, self._background if self._background is not None else theme.current().bg)
+
 
 class FadeIn(_Fade):
     introducer = True
 
     def start_state(self):
-        start = self.mobject.copy().fade(1)
+        start = self.faded()
         start.shift(-self.shift_vector if not self._point_target else self.shift_vector)
         return start.scale(self.scale_factor)
 
@@ -579,6 +601,7 @@ class FadeIn(_Fade):
         return self.mobject  # fades in to what it is
 
     def _setup_scene(self, scene):
+        super()._setup_scene(scene)
         scene.add(*self._mobjects)
 
 
@@ -590,7 +613,7 @@ class FadeOut(_Fade):
         return self.mobject  # fades out from what it is
 
     def end_state(self):
-        return self.mobject.copy().fade(1).shift(self.shift_vector).scale(self.scale_factor)
+        return self.faded().shift(self.shift_vector).scale(self.scale_factor)
 
     def clean_up_from_scene(self, scene):
         scene.remove(*self._mobjects)
