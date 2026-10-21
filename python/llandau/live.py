@@ -1,16 +1,16 @@
 """Live, interactive 3D (llandau.Viewer) over chosen slide steps.
 
-    @live_scene("butane")
-    def butane(viewer):                     # a llandau.Viewer, in the deck's theme
+    @live_scene("protein")
+    def protein(viewer):                    # a llandau.Viewer, in the deck's theme
         viewer.load(positions, numbers)     # (frames, atoms, 3), (atoms,)
         viewer.add_vectors("tangent", tangents, visible=False)
         viewer.set_plots({"energy": energy})  # under the view on G, or with plots=True
 
     class Results(Deck):
         def construct(self):
-            self.live("butane", R.body.right)                  # the next step shows it over R.body.right
-            self.reveal(place(text("dihedral scan"), R.body.left))
-            self.live("butane", R.body.right, camera={"azimuth": 30}, frame=60, show=["tangent"])
+            self.live("protein", R.body.right)                 # the next step shows it over R.body.right
+            self.reveal(place(text("the NMR models"), R.body.left))
+            self.live("protein", R.body.right, camera={"azimuth": 30}, frame=20, show=["tangent"])
             self.reveal(...)
 
     llandau play slides.py

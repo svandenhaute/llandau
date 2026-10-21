@@ -2,7 +2,7 @@
 
 use glam::Vec3;
 
-/// Atom roles, as riemann's `atom_role`.
+/// Atom roles.
 pub const HYDROGEN: u8 = 0;
 pub const SIDECHAIN: u8 = 1;
 pub const BACKBONE: u8 = 2; // N, C, O

@@ -9,11 +9,11 @@ from llandau import Deck, LIGHT, R, build, place, subplots
 def figure():
     x = np.linspace(-1, 1, 100)
     fig, ax = subplots(figsize=(3.0, 2.0))
-    ax.plot(x, np.tanh(2 * x), color="k", label="exact")
-    ax.plot(x, np.tanh(2 * x) - 0.1, color="#b8b8b8", label="ODE ($A -> B$)")
+    ax.plot(x, np.tanh(2 * x), color="k", label="model")
+    ax.plot(x, np.tanh(2 * x) - 0.1, color="#b8b8b8", label="fit ($A -> B$)")
     ax.scatter(x[::20], np.tanh(2 * x[::20]), s=20, color="C1", zorder=50)
-    ax.set_xlabel("$lambda_(A -> B)$ [-]")
-    ax.set_ylabel("coordination number [-]")
+    ax.set_xlabel("$x$ [-]")
+    ax.set_ylabel("$y$ [-]")
     ax.set_xlim([-1.0, 1.0])
     ax.legend(bbox_to_anchor=(0.5, 1.0))
     return fig, ax

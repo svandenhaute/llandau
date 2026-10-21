@@ -18,4 +18,4 @@ ax.errorbar(ts, samples, yerr=0.05, fmt="o", ms=4, color="C0", capsize=2, label=
 ax.set_xlabel("time $t$ (ps)")
 ax.set_ylabel("$x$ (Å)")
 ax.legend()
-fig.savefig("figure.png", dpi=220)
+fig.savefig("figure.png", dpi=220, transparent=False)

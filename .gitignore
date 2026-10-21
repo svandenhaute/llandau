@@ -4,3 +4,4 @@ __pycache__/
 *.egg-info/
 *.so
 target/
+examples/1l2y.pdb

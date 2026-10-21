@@ -16,7 +16,7 @@ Commands take matplotlib's arguments (color, lw / linewidth, ls / linestyle,
 marker, ms / markersize, alpha, label, s, c, cmap, vmin, vmax, edgecolor, ...).
 Sizes are in points, as in matplotlib, times `scale` (default 2: print sizes
 on a slide). Limits follow all commands made before the plot is shown, with
-matplotlib's 5% margins. The style follows a thesis matplotlibrc: inward
+matplotlib's 5% margins. The style follows a paper's matplotlibrc: inward
 ticks, thin black spines, markers with thin black edges, a frameless legend.
 """
 from __future__ import annotations

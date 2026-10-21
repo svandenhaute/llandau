@@ -35,7 +35,7 @@ page per step.
 
 ## 3D trajectories
 
-![trp-cage's NMR models playing: backbone tube, side chains and trails, lit and then in flat shading](https://raw.githubusercontent.com/svandenhaute/llandau/main/docs/protein.gif)
+![trp-cage's NMR models playing: all atoms in flat shading, then the protein tube and side chains, lit](https://raw.githubusercontent.com/svandenhaute/llandau/main/docs/protein.gif)
 
 ```python
 viewer = Viewer().load(positions, numbers, roles=roles)    # (frames, atoms, 3), (atoms,)
@@ -45,11 +45,12 @@ viewer.color_by("deviation", np.linalg.norm(positions - positions[-1], axis=-1))
 explore(viewer, plots={"rmsd": rmsd}, t=t)                 # a window; ? shows every key
 ```
 
+`python examples/protein.py` is this, on trp-cage's NMR models from the PDB.
+
 The window is interactive: drag to turn, scroll through the frames, and every setting has a
 key (lit or flat shading, protein or atoms, layers, a light or dark theme); R records what you
 do into an MP4. A deck shows the same viewer live inside a slide, just as interactive, with
-`self.live("name", R.body.right, camera={"azimuth": 30}, frame=60)`:
-`llandau play examples/live_demo.py`.
+`self.live("name", R.body.right, camera={"azimuth": 30}, frame=60)`.
 
 ## Paper figures
 

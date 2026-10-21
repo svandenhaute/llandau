@@ -3,14 +3,14 @@
     from llandau import subplots
 
     fig, ax = subplots(figsize=(3.0, 2.0))            # inches
-    ax.plot(x, y, color="k", label="exact")
-    ax.scatter(xs, ys, s=20, color=BLUE, zorder=50)
-    ax.set_xlabel("$lambda_(A -> B)$")               # math in Typst syntax
+    ax.plot(t, signal, color="k", label="model")
+    ax.scatter(ts, samples, s=20, color="C0", zorder=50)
+    ax.set_xlabel("time $t$ (ps)")                   # math in Typst syntax
     ax.legend()
     fig.savefig("ode.svg")                           # vector; .pdf and .png too
 
 Sizes are print sizes: the figure in inches, lines, markers and fonts in points.
-The style follows the thesis matplotlibrc (Linux Biolinum at 9.5 pt, thin black
+The style is a paper's matplotlibrc (Linux Biolinum at 9.5 pt, thin black
 spines, inward ticks). Text is typeset with Typst and saved as outlines, so
 figures look the same wherever they are included. A figure is also a mobject:
 place() it on a slide, or reveal its plots' artists in steps.
@@ -30,7 +30,7 @@ from .mobject import Color, Group, ImageMobject, Mobject, VMobject
 
 __all__ = ["Figure", "subplots", "FIGURE_STYLE"]
 
-# the thesis matplotlibrc, in points
+# the paper style, in points
 FIGURE_STYLE = {
     "font.size": 9.5,
     "legend.fontsize": 8,

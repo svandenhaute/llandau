@@ -1,5 +1,5 @@
 """llandau: smooth scientific slides, drawn live (no videos are rendered), with
-interactive 3D views of atomic trajectories (riemann's paths, splines, proteins).
+interactive 3D views of atomic trajectories (paths, splines, proteins).
 
     from llandau import *
 
