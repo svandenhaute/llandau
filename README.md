@@ -2,8 +2,9 @@
 
 Scientific slides drawn live, with interactive 3D trajectories inside them. A deck is
 written like a [manim](https://www.manim.community) scene and plays straight from the
-code (wgpu): no videos, no render step, and stepping back or scrubbing is instant. The
-same plots save as paper figures.
+code (wgpu): no videos, no render step. Everything on screen is live while you present:
+step back, scrub, turn a molecule, change its rendering. The same plots save as paper
+figures.
 
 ```
 pip install llandau            # macOS and Linux wheels; text needs the typst CLI
@@ -11,7 +12,7 @@ pip install llandau            # macOS and Linux wheels; text needs the typst CL
 
 ## A deck
 
-![a deck playing: a plot drawing itself, a formula being written, a histogram fading in](docs/slides.gif)
+![a deck playing: a plot drawing itself, a formula being written, a histogram fading in](https://raw.githubusercontent.com/svandenhaute/llandau/main/docs/slides.gif)
 
 ```python
 from llandau import *
@@ -28,12 +29,13 @@ class Results(Deck):
 SLIDES = order(Results)
 ```
 
-`llandau play examples/slides.py` presents it (arrows step, F full screen, the wheel scrubs);
-`llandau pdf` and `llandau png` export one page per step.
+`llandau play examples/slides.py` presents it: the arrows step forward and back, the wheel
+scrubs through every animation, F goes full screen. `llandau pdf` and `llandau png` export one
+page per step.
 
 ## 3D trajectories
 
-![trp-cage's NMR models: backbone tube, trails, side chains as spheres with the molecular surface, flat shading colored by deviation](docs/protein.gif)
+![trp-cage's NMR models playing: backbone tube, side chains and trails, lit and then in flat shading](https://raw.githubusercontent.com/svandenhaute/llandau/main/docs/protein.gif)
 
 ```python
 viewer = Viewer().load(positions, numbers, roles=roles)    # (frames, atoms, 3), (atoms,)
@@ -43,20 +45,24 @@ viewer.color_by("deviation", np.linalg.norm(positions - positions[-1], axis=-1))
 explore(viewer, plots={"rmsd": rmsd}, t=t)                 # a window; ? shows every key
 ```
 
-The explorer's R key records what you do into an MP4. A deck shows the same viewer live on
-chosen steps, with `self.live("name", R.body.right, camera={"azimuth": 30}, frame=60)`:
+The window is interactive: drag to turn, scroll through the frames, and every setting has a
+key (lit or flat shading, protein or atoms, layers, a light or dark theme); R records what you
+do into an MP4. A deck shows the same viewer live inside a slide, just as interactive, with
+`self.live("name", R.body.right, camera={"azimuth": 30}, frame=60)`:
 `llandau play examples/live_demo.py`.
 
 ## Paper figures
 
-![a figure saved by llandau: two curves with highlighted points and a legend](docs/figure.png)
+![a figure saved by llandau: a damped oscillation, its envelope and noisy samples with error bars](https://raw.githubusercontent.com/svandenhaute/llandau/main/docs/figure.png)
 
 ```python
-fig, ax = subplots(figsize=(3.0, 2.0))                      # inches, points, Typst math
-ax.plot(lam, exact, color="k", label="exact")
-ax.scatter(lam[i], ode[i], s=20, color="C1", zorder=50)
-ax.set_xlabel("$lambda_(A -> B)$")
-fig.savefig("ode.pdf")                                      # or .svg, .png
+fig, ax = subplots(figsize=(3.4, 2.2))                      # inches, points, Typst math
+ax.plot(t, signal, color="k", label="model")
+ax.plot(t, envelope, color="#888888", ls="--", label="envelope")
+ax.errorbar(ts, samples, yerr=0.05, fmt="o", ms=4, capsize=2, label="samples")
+ax.set_xlabel("time $t$ (ps)")
+ax.legend()
+fig.savefig("figure.pdf")                                   # or .svg, .png
 ```
 
 `examples/` has the decks and figures above; the modules' docstrings document the rest
