@@ -230,8 +230,8 @@ impl Lives {
         moving
     }
 
-    /// Where a span is drawn now, the rectangle it is heading for (its picture
-    /// is drawn at that size), and whether it is still moving.
+    /// Where a span is drawn now, the rectangle it is heading for, and whether
+    /// it is still moving.
     fn placement(&self, timeline: &Timeline, span: usize) -> ([f32; 4], [f32; 4], bool) {
         let live = timeline.lives[span];
         match (&self.open, live.opens) {
@@ -280,7 +280,9 @@ impl Lives {
                     self.open = None; // closed
                 }
             }
-            let rect = pixel_rect(timeline, size, heading);
+            // drawn at the size it has now: a picture of another aspect ratio would stretch
+            let _ = heading;
+            let rect = pixel_rect(timeline, size, now);
             let pixels = (rect[2].round().max(1.0) as u32, rect[3].round().max(1.0) as u32);
             if !matches!(&self.targets[live.viewer], Some(t) if t.size == pixels) {
                 let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
