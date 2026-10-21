@@ -193,7 +193,8 @@ impl Lives {
         let active: Vec<usize> = timeline.live_at(time).collect();
         let shown: Vec<usize> = active.iter().map(|&i| timeline.lives[i].viewer).collect();
         if self.open.as_ref().is_some_and(|o| !active.contains(&o.span)) {
-            self.open = None; // its step is over
+            self.open = None; // its step is over, and the panel with it
+            self.panel = false;
         }
         // views no longer shown start afresh next time
         for (viewer, state) in self.states.iter_mut().enumerate() {
@@ -288,13 +289,17 @@ impl Lives {
         }
     }
 
-    /// Open span `span` up, or close it when it is open.
+    /// Open span `span` up, or close it when it is open (the panel goes with it:
+    /// a cell shows the molecule, not the controls).
     fn toggle(&mut self, span: usize) {
         let now = Instant::now();
         self.open = match self.open.take() {
             Some(open) if open.span == span => {
                 // reverse from where it is
                 let elapsed = open.since.elapsed().min(OPEN_MOVE);
+                if open.opening {
+                    self.panel = false;
+                }
                 Some(Open { span, since: now - (OPEN_MOVE - elapsed), opening: !open.opening })
             }
             _ => Some(Open { span, since: now, opening: true }),
@@ -677,6 +682,8 @@ mod tests {
         lives.cursor = (300.0, 450.0);
         assert!(lives.panel_point(&timeline, 1.0, size, false).is_none(), "the view, not its panel");
         assert!(lives.panel_point(&timeline, 1.0, size, true).is_some(), "a drag from the panel follows");
+        lives.toggle(0); // closing hides the panel
+        assert!(!lives.panel);
     }
 
     #[test]
