@@ -674,6 +674,16 @@ impl App<'_> {
                 v.set_radius_scale(radius);
             }
             ui.end_row();
+            let frames = v.num_path_frames();
+            if frames > 2 {
+                // the slider's top is the whole trails
+                let mut window = v.trail_window().unwrap_or(frames - 1).min(frames - 1);
+                ui.label("trail window");
+                if ui.add(egui::Slider::new(&mut window, 0..=frames - 1)).changed() {
+                    v.set_trail_window((window < frames - 1).then_some(window));
+                }
+                ui.end_row();
+            }
             let mut opacity = v.scene.surface.opacity;
             ui.label("surface opacity");
             if ui.add(egui::Slider::new(&mut opacity, 0.05..=1.0)).changed() {

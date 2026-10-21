@@ -41,6 +41,7 @@ page per step.
 viewer = Viewer().load(positions, numbers, roles=roles)    # (frames, atoms, 3), (atoms,)
 viewer.style = "protein"
 viewer.set_trails(segment_ids=segment_ids(t, boundaries))
+viewer.trail_window = 50                                   # frames of trail each side; None: all
 viewer.color_by("deviation", np.linalg.norm(positions - positions[-1], axis=-1))
 explore(viewer, plots={"rmsd": rmsd}, t=t)                 # a window; ? shows every key
 ```

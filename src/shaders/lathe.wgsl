@@ -28,9 +28,16 @@ struct VertexOut {
     @location(6) axis: vec3<f32>,
 };
 
-@vertex
-fn vs(vertex: Vertex, instance: Instance) -> VertexOut {
-    let axis = instance.end - instance.start;
+// a segment of a trail: consecutive points of a polyline, one color, the radius
+// from the globals
+struct TrailInstance {
+    @location(2) start: vec3<f32>,
+    @location(4) end: vec3<f32>,
+    @location(5) color: vec4<f32>,
+};
+
+fn lathe(vertex: Vertex, start: vec3<f32>, end: vec3<f32>, r: f32, color_start: vec4<f32>, color_end: vec4<f32>) -> VertexOut {
+    let axis = end - start;
     let length = max(length(axis), 1e-6);
     let w = axis / length;
     var helper = vec3(0.0, 0.0, 1.0);
@@ -39,8 +46,7 @@ fn vs(vertex: Vertex, instance: Instance) -> VertexOut {
     }
     let u = normalize(cross(helper, w));
     let v = cross(w, u);
-    let r = instance.radius;
-    let world = instance.start + vertex.position.z * axis + r * (vertex.position.x * u + vertex.position.y * v);
+    let world = start + vertex.position.z * axis + r * (vertex.position.x * u + vertex.position.y * v);
     // normals transform with the inverse transpose of the (radius, radius, length) scaling
     let normal = vertex.normal.x / r * u + vertex.normal.y / r * v + vertex.normal.z / length * w;
     let position = (g.view * vec4(world, 1.0)).xyz;
@@ -50,11 +56,21 @@ fn vs(vertex: Vertex, instance: Instance) -> VertexOut {
     out.normal = (g.view * vec4(normal, 0.0)).xyz;
     out.position = position;
     out.along = vertex.position.z;
-    out.color_start = instance.color_start;
-    out.color_end = instance.color_end;
+    out.color_start = color_start;
+    out.color_end = color_end;
     out.radius = r;
     out.axis = (g.view * vec4(w, 0.0)).xyz;
     return out;
+}
+
+@vertex
+fn vs(vertex: Vertex, instance: Instance) -> VertexOut {
+    return lathe(vertex, instance.start, instance.end, instance.radius, instance.color_start, instance.color_end);
+}
+
+@vertex
+fn vs_trail(vertex: Vertex, instance: TrailInstance) -> VertexOut {
+    return lathe(vertex, instance.start, instance.end, g.viewport.z, instance.color, instance.color);
 }
 
 @fragment

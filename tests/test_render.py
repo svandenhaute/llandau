@@ -55,6 +55,31 @@ def test_layers(viewer):
     assert drawn(viewer.render_image(160, 120)) > 0.05
 
 
+def test_trail_window(viewer):
+    """Only the segments within the window of the current frame are drawn: the
+    segments that should be inside are red, the rest blue."""
+    viewer.set_visible("atoms", False)
+    viewer.set_sizes(trail_radius=0.1)
+    viewer.fog = 0.0
+
+    def colors_drawn(frame, window, inside):
+        colors = np.tile([0.0, 0.0, 1.0, 1.0], (len(POSITIONS) - 1, 1))
+        colors[inside] = [1.0, 0.0, 0.0, 1.0]
+        viewer.set_trails(colors=colors)
+        viewer.frame, viewer.trail_window = frame, window
+        image = viewer.render_image(160, 120).astype(int)
+        red = (image[..., 0] > image[..., 2] + 40).any()
+        blue = (image[..., 2] > image[..., 0] + 40).any()
+        return red, blue
+
+    assert viewer.trail_window is None
+    assert colors_drawn(2, None, slice(0, 4)) == (True, False)
+    assert colors_drawn(2, 1, slice(1, 3)) == (True, False)  # frames 1 to 3
+    assert colors_drawn(0, 1, slice(0, 1)) == (True, False)  # clamped at the ends
+    assert colors_drawn(4, 1, slice(3, 4)) == (True, False)
+    assert colors_drawn(2, 0, slice(0, 0)) == (False, False)
+
+
 def test_ghost_and_discrete(viewer):
     viewer.set_ghost(POSITIONS[-1] + 1.0)
     viewer.set_discrete_frames(POSITIONS[::2])

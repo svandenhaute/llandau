@@ -12,7 +12,7 @@ use glam::Vec3;
 use wgpu::util::DeviceExt;
 
 use crate::camera::Camera;
-use crate::scene::{Geometry, LatheInstance, SphereInstance};
+use crate::scene::{Geometry, LatheInstance, SphereInstance, TrailGeometry};
 use crate::surface::MeshVertex;
 
 pub const SAMPLES: u32 = 4;
@@ -62,8 +62,12 @@ impl Gpu {
         };
         // without a GPU: a software adapter (e.g. Mesa's lavapipe), if there is one
         let adapter = request(false).or_else(|_| request(true)).map_err(|e| format!("no GPU adapter: {e}"))?;
+        // buffers as large as the adapter allows (the default limit is 256 MiB, which
+        // the trails of a long trajectory exceed)
+        let limits = wgpu::Limits { max_buffer_size: adapter.limits().max_buffer_size, ..Default::default() };
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("llandau"),
+            required_limits: limits,
             ..Default::default()
         }))
         .map_err(|e| format!("no GPU device: {e}"))?;
@@ -76,6 +80,7 @@ impl Gpu {
 struct Globals {
     view: [[f32; 4]; 4],
     proj: [[f32; 4]; 4],
+    // x, y: pixels; z: the trail radius
     viewport: [f32; 4],
     light: [f32; 4],
     shading: [f32; 4],
@@ -89,6 +94,8 @@ struct Globals {
 enum Shader {
     Spheres,
     Lathe,
+    /// the lathe over consecutive points of a polyline (see TrailGeometry)
+    Trail,
     /// plain triangle lists (not instanced)
     Mesh,
 }
@@ -110,6 +117,7 @@ pub enum Slot {
     Spheres,
     Tubes,
     Cones,
+    /// drawn from `Renderer::trails`, not a slot buffer
     Trails,
     GhostSpheres,
     GhostTubes,
@@ -140,6 +148,13 @@ impl GpuBuffer {
     }
 
     pub fn upload<T: Pod>(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, items: &[T]) {
+        // never past the device's largest buffer: the items that fit, with a warning
+        let max_bytes = device.limits().max_buffer_size as usize;
+        let fit = max_bytes / size_of::<T>().max(1);
+        if items.len() > fit {
+            eprintln!("llandau: drawing {fit} of {} items: the GPU's buffers hold {max_bytes} bytes", items.len());
+        }
+        let items = &items[..items.len().min(fit)];
         self.count = items.len() as u32;
         let bytes: &[u8] = bytemuck::cast_slice(items);
         if bytes.is_empty() {
@@ -150,6 +165,7 @@ impl GpuBuffer {
             _ => {
                 // twice the size: fewer reallocations as a scene grows
                 let size = (2 * bytes.len() as u64).next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT);
+                let size = size.min(max_bytes as u64).max(bytes.len() as u64);
                 let buffer = device.create_buffer(&wgpu::BufferDescriptor {
                     label: None,
                     size,
@@ -167,6 +183,19 @@ impl GpuBuffer {
         self.buffer.as_ref().filter(|_| self.count > 0).map(|b| b.slice(..))
     }
 }
+
+/// The trails on the GPU (see TrailGeometry); its radius goes to the shader
+/// through the globals.
+struct TrailBuffers {
+    points: GpuBuffer,
+    colors: GpuBuffer,
+    radius: f32,
+    lines: u32,
+    points_per_line: u32,
+}
+
+/// bytes of a trail point
+const POINT_BYTES: u64 = 12;
 
 /// A unit mesh for the lathe shader: (position, normal) per vertex.
 struct Mesh {
@@ -198,6 +227,9 @@ pub struct Renderer {
     thin_tube: Mesh,
     cone: Mesh,
     slots: HashMap<Slot, GpuBuffer>,
+    trails: TrailBuffers,
+    /// the trail segments drawn (see Scene::trail_segments)
+    pub trail_segments: std::ops::Range<u32>,
     pub background: [f32; 4],
     /// decoding gamma of the colors (see linear() in the shaders)
     pub color_gamma: f32,
@@ -255,6 +287,14 @@ impl Renderer {
             thin_tube: Mesh::new(device, "thin tube", &tube_mesh(8)),
             cone: Mesh::new(device, "cone", &cone_mesh(24)),
             slots: HashMap::new(),
+            trails: TrailBuffers {
+                points: GpuBuffer::new(wgpu::BufferUsages::VERTEX),
+                colors: GpuBuffer::new(wgpu::BufferUsages::VERTEX),
+                radius: 0.0,
+                lines: 0,
+                points_per_line: 0,
+            },
+            trail_segments: 0..0,
             background: [1.0, 1.0, 1.0, 1.0],
             color_gamma: DEFAULT_COLOR_GAMMA,
             flat: false,
@@ -279,8 +319,15 @@ impl Renderer {
         self.upload_slot(device, queue, Slot::GhostSurface, &geometry.ghost_surface);
     }
 
-    pub fn upload_trails(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, trails: &[LatheInstance]) {
-        self.upload_slot(device, queue, Slot::Trails, trails);
+    pub fn upload_trails(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, trails: &TrailGeometry) {
+        let t = &mut self.trails;
+        t.points.upload(device, queue, &trails.points);
+        t.colors.upload(device, queue, &trails.colors);
+        t.radius = trails.radius;
+        t.lines = trails.lines;
+        t.points_per_line = trails.points_per_line;
+        // the lines that were uploaded whole, if the points were cut to the GPU's largest buffer
+        t.lines = t.lines.min(t.points.count / t.points_per_line.max(1));
     }
 
     pub fn upload_ghost(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, spheres: &[SphereInstance], tubes: &[LatheInstance]) {
@@ -310,7 +357,7 @@ impl Renderer {
             (Slot::Tubes, Shader::Lathe, Some(&self.tube), Variant::Opaque),
             (Slot::Cones, Shader::Lathe, Some(&self.cone), Variant::Opaque),
             (Slot::Surface, Shader::Mesh, None, Variant::Opaque),
-            (Slot::Trails, Shader::Lathe, Some(&self.thin_tube), Variant::Blended),
+            (Slot::Trails, Shader::Trail, Some(&self.thin_tube), Variant::Blended),
             (Slot::GhostSpheres, Shader::Spheres, None, Variant::GhostDepth),
             (Slot::GhostTubes, Shader::Lathe, Some(&self.tube), Variant::GhostDepth),
             (Slot::GhostSpheres, Shader::Spheres, None, Variant::GhostColor),
@@ -340,7 +387,7 @@ impl Renderer {
         let globals = Globals {
             view: view.to_cols_array_2d(),
             proj: camera.projection(aspect).to_cols_array_2d(),
-            viewport: [viewport[2], viewport[3], 0.0, 0.0],
+            viewport: [viewport[2], viewport[3], self.trails.radius, 0.0],
             light: light.extend(self.color_gamma).to_array(),
             shading: [if self.flat { 1.0 } else { 0.0 }, OUTLINE_WIDTH, OUTLINE_MIN_PIXELS, HALO_WIDTH],
             outline: self.outline,
@@ -376,6 +423,30 @@ impl Renderer {
             let [x, y, width, height] = viewport;
             pass.set_viewport(x, y, width.max(1.0), height.max(1.0), 0.0, 1.0);
             for &(slot, shader, mesh, variant) in &passes {
+                if slot == Slot::Trails {
+                    let t = &self.trails;
+                    let (Some(points), Some(colors), Some(mesh)) = (&t.points.buffer, t.colors.slice(), mesh) else {
+                        continue;
+                    };
+                    let segments = t.points_per_line.saturating_sub(1);
+                    let range = self.trail_segments.start.min(segments)..self.trail_segments.end.min(segments);
+                    if range.is_empty() {
+                        continue;
+                    }
+                    // each line is instanced over its segments: start from its points, end from
+                    // the same points one further
+                    pass.set_pipeline(&self.pipelines[&(format, shader, variant)]);
+                    pass.set_vertex_buffer(0, mesh.buffer.slice(..));
+                    pass.set_vertex_buffer(3, colors);
+                    let bytes_per_line = POINT_BYTES * t.points_per_line as u64;
+                    for line in 0..t.lines as u64 {
+                        let offset = line * bytes_per_line;
+                        pass.set_vertex_buffer(1, points.slice(offset..offset + bytes_per_line));
+                        pass.set_vertex_buffer(2, points.slice(offset + POINT_BYTES..offset + bytes_per_line));
+                        pass.draw(0..mesh.vertices, range.clone());
+                    }
+                    continue;
+                }
                 let Some(GpuBuffer { buffer: Some(buffer), count: count @ 1.., .. }) = self.slots.get(&slot) else {
                     continue;
                 };
@@ -443,17 +514,34 @@ impl Renderer {
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &sphere_attributes,
         })];
+        let mesh_layout = Some(wgpu::VertexBufferLayout {
+            array_stride: 24,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &mesh_attributes,
+        });
         let lathe_buffers = [
-            Some(wgpu::VertexBufferLayout {
-                array_stride: 24,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &mesh_attributes,
-            }),
+            mesh_layout.clone(),
             Some(wgpu::VertexBufferLayout {
                 array_stride: std::mem::size_of::<LatheInstance>() as u64,
                 step_mode: wgpu::VertexStepMode::Instance,
                 attributes: &lathe_attributes,
             }),
+        ];
+        // a trail: the polyline points bound twice, once for the segment starts and
+        // once, a point further, for its ends; then the per-segment colors
+        let (trail_start, trail_end, trail_color) = (
+            [attribute(2, 0, wgpu::VertexFormat::Float32x3)],
+            [attribute(4, 0, wgpu::VertexFormat::Float32x3)],
+            [attribute(5, 0, wgpu::VertexFormat::Float32x4)],
+        );
+        let instanced = |array_stride, attributes| {
+            Some(wgpu::VertexBufferLayout { array_stride, step_mode: wgpu::VertexStepMode::Instance, attributes })
+        };
+        let trail_buffers = [
+            mesh_layout,
+            instanced(POINT_BYTES, &trail_start),
+            instanced(POINT_BYTES, &trail_end),
+            instanced(16, &trail_color),
         ];
         let surface_attributes = [
             attribute(0, 0, wgpu::VertexFormat::Float32x3),
@@ -471,7 +559,11 @@ impl Renderer {
             Shader::Lathe => {
                 (&self.lathe_shader, &lathe_buffers, wgpu::PrimitiveTopology::TriangleList, Some(wgpu::Face::Back))
             }
+            Shader::Trail => {
+                (&self.lathe_shader, &trail_buffers, wgpu::PrimitiveTopology::TriangleList, Some(wgpu::Face::Back))
+            }
         };
+        let vertex_entry = if shader == Shader::Trail { "vs_trail" } else { "vs" };
         let targets = [Some(wgpu::ColorTargetState { format, blend, write_mask })];
         let outlines = match variant {
             Variant::Blended | Variant::Overlay => 0.0,
@@ -485,7 +577,7 @@ impl Renderer {
             layout: Some(&self.layout),
             vertex: wgpu::VertexState {
                 module,
-                entry_point: Some("vs"),
+                entry_point: Some(vertex_entry),
                 compilation_options: wgpu::PipelineCompilationOptions { constants, ..Default::default() },
                 buffers,
             },

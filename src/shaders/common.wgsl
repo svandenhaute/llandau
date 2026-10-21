@@ -4,6 +4,7 @@
 struct Globals {
     view: mat4x4<f32>,
     proj: mat4x4<f32>,
+    // x, y: pixels; z: the trail radius
     viewport: vec4<f32>,
     light: vec4<f32>,
     // x: 1 for flat shading; y: outline width in angstrom, z: at least this many pixels;

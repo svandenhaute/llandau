@@ -41,6 +41,19 @@ impl LatheInstance {
     }
 }
 
+/// The trails as polylines: the points of each trailed atom through the frames,
+/// one atom after the other (lines * points_per_line), and the color of each
+/// segment (points_per_line - 1), the same for every atom. A point is 12 bytes
+/// on the GPU where a cylinder instance would be 64: the trails of a long
+/// trajectory are its largest buffer.
+pub struct TrailGeometry {
+    pub points: Vec<[f32; 3]>,
+    pub colors: Vec<Rgba>,
+    pub radius: f32,
+    pub lines: u32,
+    pub points_per_line: u32,
+}
+
 /// Instances of one frame, by how they are drawn.
 #[derive(Default)]
 pub struct Geometry {
@@ -204,6 +217,8 @@ pub struct Trails {
     pub segment_ids: Option<Vec<u32>>,
     pub opacity: f32,
     pub radius: f32,
+    /// draw only the segments within this many frames of the current one; None: all
+    pub window: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -283,7 +298,7 @@ impl Default for Scene {
             stick_radius: 0.16,
             tube_radius: 0.32,
             arrow_radius: 0.05,
-            trails: Trails { visible: true, colors: None, segment_ids: None, opacity: 1.0, radius: 0.02 },
+            trails: Trails { visible: true, colors: None, segment_ids: None, opacity: 1.0, radius: 0.02, window: None },
             vectors: BTreeMap::new(),
             points: BTreeMap::new(),
             colorings: BTreeMap::new(),
@@ -535,10 +550,25 @@ impl Scene {
         }
     }
 
+    /// The trail segments drawn at `frame` (segment i joins frames i and i + 1): all,
+    /// or those within `trails.window` frames of it.
+    pub fn trail_segments(&self, frame: usize) -> std::ops::Range<u32> {
+        let Some(s) = &self.structure else {
+            return 0..0;
+        };
+        let segments = s.num_frames().saturating_sub(1);
+        let frame = self.frame_positions(s, frame).1.unwrap_or(frame);
+        match self.trails.window {
+            Some(window) => frame.saturating_sub(window) as u32..(frame + window).min(segments) as u32,
+            None => 0..segments as u32,
+        }
+    }
+
     /// Trails of the marked atoms through all frames (they do not change with the frame).
-    pub fn trails(&self) -> Vec<LatheInstance> {
+    pub fn trails(&self) -> TrailGeometry {
+        let radius = self.trails.radius;
         let Some(s) = self.structure.as_ref().filter(|s| self.trails.visible && s.num_frames() > 1) else {
-            return vec![];
+            return TrailGeometry { points: vec![], colors: vec![], radius, lines: 0, points_per_line: 0 };
         };
         let t = &self.trails;
         let segment_color = |segment: usize| -> Rgba {
@@ -550,14 +580,17 @@ impl Scene {
             [color[0], color[1], color[2], color[3] * t.opacity]
         };
         let frames = s.num_frames();
-        let mut out = Vec::new();
-        for &a in self.trailed_atoms(s) {
-            for segment in 0..frames - 1 {
-                let (p, q) = (s.positions[segment * s.num_atoms + a], s.positions[(segment + 1) * s.num_atoms + a]);
-                let color = segment_color(segment);
-                out.push(LatheInstance::new(p, q, t.radius, color, color));
-            }
+        let atoms = self.trailed_atoms(s);
+        let points = atoms
+            .iter()
+            .flat_map(|&a| (0..frames).map(move |frame| s.positions[frame * s.num_atoms + a].to_array()))
+            .collect();
+        TrailGeometry {
+            points,
+            colors: (0..frames - 1).map(segment_color).collect(),
+            radius,
+            lines: atoms.len() as u32,
+            points_per_line: frames as u32,
         }
-        out
     }
 }

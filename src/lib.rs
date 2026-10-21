@@ -122,6 +122,7 @@ impl Viewer {
             let (spheres, tubes) = self.scene.ghost_geometry();
             self.renderer.upload_ghost(device, queue, &spheres, &tubes);
         }
+        self.renderer.trail_segments = self.scene.trail_segments(self.frame);
         self.renderer.background = self.scene.theme.background;
         self.renderer.outline = self.scene.theme.outline;
         self.stale = Stale::default();
@@ -666,6 +667,18 @@ impl Viewer {
         trails.opacity = opacity;
         self.changed(ALL);
         Ok(())
+    }
+
+    /// Frames of trail drawn on each side of the current frame; None: the whole trails.
+    #[getter]
+    fn trail_window(&self) -> Option<usize> {
+        self.scene.trails.window
+    }
+
+    #[setter]
+    fn set_trail_window(&mut self, window: Option<usize>) {
+        self.scene.trails.window = window;
+        self.changed(FRAME);
     }
 
     /// Arrows from each atom: vectors (frames, atoms, 3) or (atoms, 3), times `scale`.
