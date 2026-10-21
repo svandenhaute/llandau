@@ -30,6 +30,7 @@ modules
     cli        llandau play | pdf | png
     viewer     Viewer: atomic trajectories in 3D (trails, tangents, protein styles, surfaces),
                offscreen images and an explorer window (llandau.explorer)
+    video      Video: RGBA frames to MP4 through ffmpeg (the explorer's record button)
     elements, colormaps, pdb
 """
 from .mobject import *

@@ -3,8 +3,13 @@
 //!
 //! Keys: space plays, , and . step frames (with shift: 5% of them), Home and
 //! End go to the first and last frame, D toggles the discrete states, 0 resets
-//! the camera, Escape closes. Scrolling scrubs, faster when scrolling fast and
-//! for long trajectories; with shift, frame by frame.
+//! the camera, R starts and stops recording, Escape closes. Scrolling scrubs,
+//! faster when scrolling fast and for long trajectories; with shift, frame by
+//! frame.
+//!
+//! Recording keeps the view's state at every redraw; stopping replays it
+//! offscreen at a fixed frame rate into a video (a few frames per redraw, so
+//! the window stays responsive).
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -12,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use egui::{Color32, Key, PointerButton, Sense};
 use egui_plot::{Line, Plot, PlotPoints, Points, VLine};
+use numpy::{PyArray1, PyArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use winit::application::ApplicationHandler;
@@ -21,6 +27,8 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::platform::run_on_demand::EventLoopExtRunOnDemand;
 use winit::window::{Window, WindowId};
 
+use crate::camera::Camera;
+use crate::recording::{Recording, State};
 use crate::render::{Gpu, Offscreen};
 
 const PANEL_WIDTH: f32 = 300.0;
@@ -32,6 +40,9 @@ const SHORT_TRAJECTORY: f32 = 200.0;
 const SCROLL_SPEED: f32 = 400.0;
 /// ... up to this factor.
 const MAX_ACCELERATION: f32 = 10.0;
+/// Time per redraw spent rendering a video's frames.
+const RENDER_BUDGET: Duration = Duration::from_millis(100);
+const VIDEO_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
 thread_local! {
     // winit allows one event loop per process; each explore() reuses it.
@@ -52,6 +63,12 @@ pub struct Options {
     pub buttons: Vec<(String, Py<PyAny>)>,
     /// render one frame of the window to this PNG path and close
     pub screenshot: Option<String>,
+    /// function (width, height) -> video writer (write(frame), close() -> path,
+    /// abort()) for the record button; None: recording is unavailable
+    pub recorder: Option<Py<PyAny>>,
+    /// video size in pixels (default: the 3D view's) and frames per second
+    pub record_size: Option<(u32, u32)>,
+    pub record_fps: f64,
 }
 
 /// What the explorer needs from the viewer, implemented in lib.rs.
@@ -103,6 +120,8 @@ pub trait Controls {
     fn pan(&mut self, dx: f32, dy: f32, height: f32);
     fn zoom(&mut self, factor: f32);
     fn reset_camera(&mut self);
+    fn camera(&self) -> Camera;
+    fn set_camera(&mut self, camera: Camera);
     fn camera_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>>;
 }
 
@@ -130,7 +149,15 @@ struct App<'a, V: Explorable> {
     status: String,
     frames_drawn: u32,
     close_requested: bool,
+    record: Record,
     error: Option<PyErr>,
+}
+
+/// The record button: off, recording, or rendering the video.
+enum Record {
+    Off,
+    On { start: Instant, size: (u32, u32), recording: Recording },
+    Rendering { recording: Recording, size: (u32, u32), writer: Py<PyAny>, target: Box<Offscreen>, next: usize, total: usize },
 }
 
 /// Run `f` with the process's event loop (created on first use).
@@ -163,10 +190,12 @@ pub fn explore<V: Explorable>(viewer: &mut V, py: Python<'_>, options: Options) 
             status: String::new(),
             frames_drawn: 0,
             close_requested: false,
+            record: Record::Off,
             error: None,
         };
         event_loop.run_app_on_demand(&mut app).map_err(|e| crate::runtime_error(format!("window: {e}")))?;
         app.surface = None; // close the window before returning
+        app.finish_recording();
         match app.error.take() {
             Some(error) => Err(error),
             None => Ok(()),
@@ -230,6 +259,7 @@ impl<V: Explorable> App<'_, V> {
         let raw_input = target.egui_state.take_egui_input(&target.window);
         let egui = self.egui.clone();
         let output = egui.run_ui(raw_input, |ui| self.ui(ui));
+        self.record_step();
         target.egui_state.handle_platform_output(&target.window, output.platform_output);
         let paint_jobs = self.egui.tessellate(output.shapes, output.pixels_per_point);
         let ppp = output.pixels_per_point;
@@ -319,6 +349,7 @@ impl<V: Explorable> App<'_, V> {
         }
         self.frames_drawn += 1;
         let again = self.playing
+            || !matches!(self.record, Record::Off)
             || self.options.screenshot.is_some()
             || output.viewport_output.values().any(|v| v.repaint_delay < Duration::from_millis(100));
         if again {
@@ -373,6 +404,9 @@ impl<V: Explorable> App<'_, V> {
         }
         if pressed(Key::Num0) {
             controls.reset_camera();
+        }
+        if pressed(Key::R) {
+            self.toggle_recording(ui.ctx().pixels_per_point());
         }
         if pressed(Key::Escape) {
             self.close_requested = true;
@@ -450,6 +484,8 @@ impl<V: Explorable> App<'_, V> {
                 }
             }
         });
+        self.record_controls(ui);
+        let controls = self.viewer.controls();
         ui.separator();
 
         // appearance
@@ -586,6 +622,144 @@ impl<V: Explorable> App<'_, V> {
                     }
                 });
         }
+    }
+
+    fn record_controls(&mut self, ui: &mut egui::Ui) {
+        let mut toggle = false;
+        let mut cancel = false;
+        ui.horizontal(|ui| match &self.record {
+            Record::Off => {
+                let available = self.options.recorder.is_some();
+                let button = ui.add_enabled(available, egui::Button::new("⏺ Record"));
+                if available {
+                    toggle = button.on_hover_text("R: start; the video is rendered when you stop").clicked();
+                } else {
+                    button.on_disabled_hover_text("recording needs ffmpeg: pip install 'llandau[video]'");
+                }
+            }
+            Record::On { start, size, .. } => {
+                toggle = ui.button("⏹ Stop").clicked();
+                let seconds = start.elapsed().as_secs();
+                ui.colored_label(Color32::from_rgb(220, 50, 50), format!("● {}:{:02}", seconds / 60, seconds % 60));
+                ui.small(format!("{}×{}", size.0, size.1));
+            }
+            Record::Rendering { next, total, .. } => {
+                cancel = ui.button("Cancel").clicked();
+                let progress = *next as f32 / *total as f32;
+                ui.add(egui::ProgressBar::new(progress).text(format!("rendering {next}/{total}")));
+            }
+        });
+        if toggle {
+            self.toggle_recording(ui.ctx().pixels_per_point());
+        }
+        if cancel {
+            self.stop_rendering("cancelled".into());
+        }
+    }
+
+    /// Start recording, or stop it and start rendering the video.
+    fn toggle_recording(&mut self, pixels_per_point: f32) {
+        match std::mem::replace(&mut self.record, Record::Off) {
+            Record::Off if self.options.recorder.is_some() => {
+                let view = self.viewport.size() * pixels_per_point;
+                let (width, height) = self.options.record_size.unwrap_or((view.x as u32, view.y as u32));
+                // even sizes: what H.264 players take
+                let size = (width.max(2) & !1, height.max(2) & !1);
+                self.record = Record::On { start: Instant::now(), size, recording: Recording::default() };
+                self.status.clear();
+            }
+            Record::Off => {}
+            Record::On { recording, size, .. } => {
+                let total = ((recording.duration() * self.options.record_fps).round() as usize).max(1);
+                let recorder = self.options.recorder.as_ref().expect("recording without a recorder");
+                match recorder.call1(self.py, size) {
+                    Ok(writer) => {
+                        let target = Box::new(Offscreen::with_format(&self.viewer.gpu().device, size, VIDEO_FORMAT));
+                        self.record = Record::Rendering { recording, size, writer, target, next: 0, total };
+                    }
+                    Err(error) => self.status = format!("{error}"),
+                }
+            }
+            rendering @ Record::Rendering { .. } => self.record = rendering,
+        }
+    }
+
+    /// While recording, keep the view's state; while rendering, render the
+    /// video's next frames (the window then draws the live view again).
+    fn record_step(&mut self) {
+        match &mut self.record {
+            Record::Off => {}
+            Record::On { start, recording, .. } => {
+                recording.push(start.elapsed().as_secs_f64(), State::capture(self.viewer.controls()));
+            }
+            Record::Rendering { .. } => {
+                if let Err(error) = self.render_frames() {
+                    self.stop_rendering(format!("recording failed: {error}"));
+                }
+            }
+        }
+    }
+
+    fn render_frames(&mut self) -> PyResult<()> {
+        let Record::Rendering { recording, size, writer, target, next, total } = &mut self.record else {
+            return Ok(());
+        };
+        let live = State::capture(self.viewer.controls());
+        let mut current = live.clone();
+        let started = Instant::now();
+        let mut result = Ok(());
+        while *next < *total && started.elapsed() < RENDER_BUDGET {
+            let Some(state) = recording.at(*next as f64 / self.options.record_fps) else { break };
+            state.apply(self.viewer.controls(), &current);
+            current = state;
+            self.viewer.prepare();
+            let (width, height) = *size;
+            self.viewer.draw_into(target.view(), VIDEO_FORMAT, *size, [0.0, 0.0, width as f32, height as f32]);
+            let pixels = target.read(self.viewer.gpu());
+            result = PyArray1::from_vec(self.py, pixels)
+                .reshape([height as usize, width as usize, 4])
+                .and_then(|frame| writer.call_method1(self.py, "write", (frame,)))
+                .map(|_| ());
+            if result.is_err() {
+                break;
+            }
+            *next += 1;
+        }
+        live.apply(self.viewer.controls(), &current);
+        result?;
+        if *next >= *total {
+            let path: String = writer.call_method0(self.py, "close")?.extract(self.py)?;
+            self.record = Record::Off;
+            self.status = format!("saved {path}");
+        }
+        Ok(())
+    }
+
+    /// Closing the window still renders the video being recorded.
+    fn finish_recording(&mut self) {
+        if matches!(self.record, Record::Off) {
+            return;
+        }
+        if matches!(self.record, Record::On { .. }) {
+            self.toggle_recording(1.0);
+        }
+        while matches!(self.record, Record::Rendering { .. }) {
+            if let Err(error) = self.py.check_signals() {
+                self.stop_rendering("cancelled".into());
+                self.error = Some(error);
+                return;
+            }
+            self.record_step();
+        }
+        println!("{}", self.status);
+    }
+
+    /// Stop rendering without a video.
+    fn stop_rendering(&mut self, status: String) {
+        if let Record::Rendering { writer, .. } = std::mem::replace(&mut self.record, Record::Off) {
+            let _ = writer.call_method0(self.py, "abort");
+        }
+        self.status = status;
     }
 
     fn copy_text(&mut self, which: Option<usize>) -> PyResult<String> {

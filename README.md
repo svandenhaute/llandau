@@ -45,7 +45,8 @@ External tools:
 - **typst** CLI: all text and math
 - **rsvg-convert** (librsvg) or **Inkscape**: rasterizing layered SVGs (or `pip install cairosvg`)
 - fonts: Linux Biolinum O (text), Libertinus Math (math; falls back to New Computer Modern Math)
-- optional: pillow (`llandau pdf | png`), matplotlib (its colormaps), contourpy (contour plots)
+- optional: pillow (`llandau pdf | png`), matplotlib (its colormaps), contourpy (contour plots),
+  ffmpeg (videos: the explorer's record button; `pip install 'llandau[video]'` brings one)
 
 ## Slides
 
@@ -170,7 +171,10 @@ non-element color; element colors come from `llandau.elements`.
 
 `explore(viewer, plots=..., t=...)` opens a native window (winit + egui) with the 3D view, a
 panel of controls and plots; it works on macOS, X11 and Wayland. Keys: space plays, `,` `.`
-step frames, `D` toggles the discrete states, `0` resets the camera, Escape closes. Without a
+step frames, `D` toggles the discrete states, `0` resets the camera, `R` records, Escape closes.
+Recording keeps what you do in the 3D view; stopping renders it offscreen into an MP4 (H.264)
+at a fixed frame rate, without the panel: `explore(viewer, record="turn.mp4",
+record_size=(1920, 1080), record_fps=60)`, or any frames with `llandau.video.Video`. Without a
 GPU, a software Vulkan driver (Mesa's lavapipe) works; `WGPU_BACKEND=vulkan|gl|metal` picks the
 backend, `Viewer().adapter` tells which GPU is in use.
 

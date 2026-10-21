@@ -5,6 +5,7 @@ pub mod camera;
 pub mod clash;
 pub mod occlusion;
 pub mod protein;
+pub mod recording;
 pub mod render;
 pub mod scene;
 pub mod slides;
@@ -283,8 +284,11 @@ impl Viewer {
     /// Open the explorer window and return when it closes. plots: (name, xs,
     /// values) on the scale of t, the parameter of each path frame; buttons:
     /// (label, function of the camera dict returning text to copy); screenshot:
-    /// write one frame of the window to this PNG file and close.
-    #[pyo3(signature = (plots = None, t = None, info = None, buttons = None, title = None, size = (1300.0, 800.0), screenshot = None))]
+    /// write one frame of the window to this PNG file and close; recorder:
+    /// function (width, height) -> video writer for the record button, which
+    /// renders record_size pixels (default: the 3D view's) at record_fps.
+    #[pyo3(signature = (plots = None, t = None, info = None, buttons = None, title = None, size = (1300.0, 800.0),
+                        screenshot = None, recorder = None, record_size = None, record_fps = 60.0))]
     #[allow(clippy::too_many_arguments)]
     fn explore(
         &mut self,
@@ -296,7 +300,13 @@ impl Viewer {
         title: Option<String>,
         size: (f64, f64),
         screenshot: Option<String>,
+        recorder: Option<Py<PyAny>>,
+        record_size: Option<(u32, u32)>,
+        record_fps: f64,
     ) -> PyResult<()> {
+        if record_fps <= 0.0 {
+            return Err(value_error("record_fps: must be positive"));
+        }
         let options = window::Options {
             title: title.unwrap_or_else(|| "llandau".into()),
             size,
@@ -305,6 +315,9 @@ impl Viewer {
             info,
             buttons: buttons.unwrap_or_default(),
             screenshot,
+            recorder,
+            record_size,
+            record_fps,
         };
         window::explore(self, py, options)
     }
@@ -1166,6 +1179,12 @@ impl window::Controls for Viewer {
     }
     fn reset_camera(&mut self) {
         self.camera = self.home;
+    }
+    fn camera(&self) -> Camera {
+        self.camera
+    }
+    fn set_camera(&mut self, camera: Camera) {
+        self.camera = camera;
     }
     fn camera_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         Viewer::camera(self, py)
