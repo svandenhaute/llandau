@@ -52,20 +52,3 @@ A model is drawn with wgpu, and the window is interactive: drag to turn, scroll 
 key (lit or flat shading, protein or atoms, layers, a light or dark theme); R records what you
 do into an MP4. A deck shows the same viewer live inside a slide, just as interactive, with
 `self.live("name", R.body.right, camera={"azimuth": 30}, frame=60)`.
-
-## Paper figures
-
-![a figure saved by llandau: a damped oscillation, its envelope and noisy samples with error bars](https://raw.githubusercontent.com/svandenhaute/llandau/main/docs/figure.png)
-
-```python
-fig, ax = subplots(figsize=(3.4, 2.2))                      # inches, points, Typst math
-ax.plot(t, signal, color="k", label="model")
-ax.plot(t, envelope, color="#888888", ls="--", label="envelope")
-ax.errorbar(ts, samples, yerr=0.05, fmt="o", ms=4, capsize=2, label="samples")
-ax.set_xlabel("time $t$ (ps)")
-ax.legend()
-fig.savefig("figure.pdf")                                   # or .svg, .png
-```
-
-`examples/` has the decks and figures above; the modules' docstrings document the rest
-(`python -c "import llandau; help(llandau)"`).
