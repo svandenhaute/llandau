@@ -4,8 +4,8 @@ from __future__ import annotations
 import numpy as np
 
 from .mobject import (
-    BLACK, DEFAULT_STROKE_WIDTH, DL, DR, LEFT, MED_SMALL_BUFF, ORIGIN, OUT, PI, RED, RIGHT, SMALL_BUFF, TAU,
-    UL, UP, UR, WHITE, YELLOW, Mobject, VGroup, VMobject,
+    BLACK, DL, DR, LEFT, MED_SMALL_BUFF, ORIGIN, OUT, PI, RED, RIGHT, SMALL_BUFF, TAU,
+    UL, UR, WHITE, YELLOW, Mobject, VGroup, VMobject,
 )
 
 __all__ = [

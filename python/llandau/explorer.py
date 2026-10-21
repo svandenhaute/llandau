@@ -10,17 +10,11 @@
 Mouse: drag rotates, right drag (or shift + drag) pans, the wheel scrubs frames
 (faster when scrolling fast and for long trajectories; shift: frame by frame),
 ctrl + wheel or a pinch zooms, a double click resets the camera. Every control
-has a key, hinted beside it in the panel; ? shows them all:
+has a key, hinted beside it in the panel; ? in the window shows every key.
 
-    Space P  play          ← → , .  frames (shift: 5%)   Home End  first, last frame
-    D  discrete states     + −  zoom      0  reset the camera
-    T  light / dark        L  lit / flat  S  atoms / protein (shift: side chains)
-    C  next coloring       1-9  layers    ⌘C / ctrl C  copy the camera
-    G  large plots         H  hide the panel    F  full screen    R  record
-    Esc  close the keys, leave full screen, close
-
-To present: F, H, and G to show the plots large under the view with readable
-axes. No Qt needed: the window is part of llandau (winit + egui).
+To present: F (full screen), H (hide the panel) and G show the plots large
+under the view with readable axes. No Qt needed: the window is part of llandau
+(winit + egui).
 
 Record (or R) keeps what you do in the view; Stop renders it offscreen into an
 MP4 at a fixed frame rate, without the panel (needs ffmpeg: pip install

@@ -77,16 +77,12 @@ def svg(path, region: Region | None = None, **kwargs) -> SVGMobject:
 class Layer:
     id: str
     label: str
-    index: int  # position in the document (= stacking order)
 
 
 def svg_layers(path) -> list[Layer]:
     """Top-level Inkscape layers of an SVG, in document order."""
     root = ET.parse(str(path)).getroot()
-    return [
-        Layer(el.get("id") or f"_layer{i}", el.get(LABEL) or "", i)
-        for i, el in enumerate(_top_layers(root))
-    ]
+    return [Layer(el.get("id") or f"_layer{i}", el.get(LABEL) or "") for i, el in enumerate(_top_layers(root))]
 
 
 def _top_layers(el):
@@ -245,7 +241,7 @@ def layered_svg(
         if not unhidden.exists():
             all_ids = {l.id for l in svg_layers(path)}
             unhidden.write_bytes(_visible_only(path, all_ids, keep_loose=True, page_marker=True))
-        full = SVGMobject(str(unhidden), use_svg_cache=False)  # cached copies break id_to_vgroup_dict
+        full = SVGMobject(str(unhidden))
         groups = full.id_to_vgroup_dict
         if region is not None:
             # place by the page (as raster does), not by the content: objects lying off the page

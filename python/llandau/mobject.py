@@ -310,25 +310,23 @@ class Mobject:
             m.points = m.points + total
         return self
 
+    def _scale_strokes(self, factor: float, scale_stroke: bool):
+        # strokes of SVG paths keep their width relative to the drawing
+        for m in self.get_family():
+            if isinstance(m, VMobject) and (scale_stroke or m.stroke_scales):
+                m.stroke_width *= factor
+
     def scale(self, factor: float, about_point=None, about_edge=ORIGIN, scale_stroke: bool = False, **kwargs):
         if about_point is None:
             about_point = self.get_critical_point(about_edge)
-        # strokes of SVG paths keep their width relative to the drawing
-        for m in self.get_family():
-            if scale_stroke or getattr(m, "stroke_scales", False):
-                if hasattr(m, "stroke_width"):
-                    m.stroke_width *= abs(factor)
+        self._scale_strokes(abs(factor), scale_stroke)
         return self.apply_points_function(lambda p: p * factor, about_point=about_point)
 
     def stretch(self, factor: float, dim: int, about_point=None, about_edge=ORIGIN, scale_stroke: bool = False):
         if about_point is None:
             about_point = self.get_critical_point(about_edge)
-        # strokes of SVG paths scale with the drawing: by the geometric mean of the
-        # factors along x and y (as SVG transforms scale them)
-        for m in self.get_family():
-            if scale_stroke or getattr(m, "stroke_scales", False):
-                if hasattr(m, "stroke_width"):
-                    m.stroke_width *= math.sqrt(abs(factor))
+        # by the geometric mean of the factors along x and y (as SVG transforms scale strokes)
+        self._scale_strokes(math.sqrt(abs(factor)), scale_stroke)
 
         def function(points):
             points = points.copy()
@@ -664,6 +662,8 @@ class VMobject(Mobject):
     """Cubic Bézier curves with a fill and a stroke. stroke_width is in manim's
     units (hundredths of a frame unit)."""
 
+    stroke_scales = False  # the stroke width scales with the points (SVG paths)
+
     def __init__(self, color=None, fill_color=None, fill_opacity: float = 0.0, stroke_color=None,
                  stroke_opacity: float = 1.0, stroke_width: float = DEFAULT_STROKE_WIDTH, z_index: float = 0,
                  joint_type: str = "miter", cap_style: str = "butt", stacked: bool = False, **kwargs):
@@ -836,10 +836,7 @@ class VMobject(Mobject):
 
     def set_points_as_corners(self, points):
         points = np.asarray(points, dtype=float)
-        if len(points) < 2:
-            return self.set_points(points)
-        curves = [[a + t * (b - a) for t in (0, 1 / 3, 2 / 3, 1)] for a, b in zip(points[:-1], points[1:])]
-        return self.set_points(np.array(curves).reshape(-1, 3))
+        return self.set_points(_corners(points) if len(points) > 1 else points)
 
     def set_points_smoothly(self, points):
         self.set_points_as_corners(points)
@@ -862,10 +859,8 @@ class VMobject(Mobject):
         points = self.points[: 4 * self.get_num_curves()]
         if len(points) == 0:
             return []
-        starts = points[0::4]
-        ends = points[3::4]
-        breaks = [0] + [i for i in range(1, len(starts)) if not np.allclose(starts[i], ends[i - 1], atol=1e-6)]
-        breaks.append(len(starts))
+        starts, ends = points[0::4], points[3::4]
+        breaks = [0, *(np.flatnonzero(np.abs(starts[1:] - ends[:-1]).max(1) > 1e-6) + 1), len(starts)]
         return [points[4 * a: 4 * b] for a, b in zip(breaks[:-1], breaks[1:])]
 
     def is_closed(self) -> bool:
@@ -975,6 +970,18 @@ class VectorizedPoint(VMobject):
 
 # --- Bézier helpers ----------------------------------------------------------------
 
+def _corners(points, closed: bool = False) -> np.ndarray:
+    """Cubic curves (4 points each) along a polyline (n, 2) or (n, 3) -> (4(n-1), 3)."""
+    p = np.asarray(points, dtype=float)
+    if closed:
+        p = np.vstack([p, p[:1]])
+    a, b = p[:-1], p[1:]
+    out = np.zeros((len(a), 4, 3))
+    for k, t in enumerate((0, 1 / 3, 2 / 3, 1)):
+        out[:, k, :p.shape[1]] = a + t * (b - a)
+    return out.reshape(-1, 3)
+
+
 def bezier_points(curve, t) -> np.ndarray:
     """Points of a cubic at parameters t ((k, 1))."""
     p0, p1, p2, p3 = curve
@@ -1076,7 +1083,6 @@ class ImageMobject(Mobject):
             if self.pixels.shape[2] == 3:
                 self.pixels = np.concatenate([self.pixels, np.full(self.pixels.shape[:2] + (1,), 255, np.uint8)], 2)
             height, width = self.pixels.shape[:2]
-        self.pixel_size = (width, height)
         h = height / scale_to_resolution * config.frame_height
         w = h * width / height
         self.points = np.array([[-w / 2, h / 2, 0], [w / 2, h / 2, 0], [-w / 2, -h / 2, 0], [w / 2, -h / 2, 0]])
@@ -1133,7 +1139,6 @@ class SVGMobject(VMobject):
         data = Path(self.file_name).read_bytes()
         svg = parse_svg(data)
         scale = _view_box_scale(data, svg["size"])
-        self.svg_size = np.array(svg["size"]) * scale
         self.id_to_vgroup_dict: dict[str, VGroup] = {}
         for path in svg["paths"]:
             points = np.zeros((len(path["points"]), 3))

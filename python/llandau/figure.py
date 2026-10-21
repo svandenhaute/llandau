@@ -28,7 +28,7 @@ import numpy as np
 from .layout import Region
 from .mobject import Color, Group, ImageMobject, Mobject, VMobject
 
-__all__ = ["Figure", "subplots", "figure", "FIGURE_STYLE"]
+__all__ = ["Figure", "subplots", "FIGURE_STYLE"]
 
 # the thesis matplotlibrc, in points
 FIGURE_STYLE = {
@@ -72,10 +72,6 @@ class Figure(Group):
                   color=self.color, background="#FFFFFF", **kwargs)
         self.axes.append(ax)
         return ax
-
-    def gca(self):
-        """The last plot (a new one filling the figure if there is none)."""
-        return self.axes[-1] if self.axes else self.add_plot()
 
     def subplots(self, nrows: int = 1, ncols: int = 1, wspace: float = 0.1, hspace: float = 0.1, **kwargs):
         """A grid of plots (rows from the top); wspace, hspace: gaps in inches."""
@@ -127,7 +123,8 @@ class Figure(Group):
         bbox_inches="tight": cropped to what is drawn, plus pad_inches."""
         path = Path(path)
         format = (format or path.suffix.lstrip(".") or "svg").lower()
-        svg = to_svg(self.drawn(), self._bounds(bbox_inches, pad_inches), None if transparent else "#FFFFFF")
+        drawn = self.drawn()
+        svg = to_svg(drawn, self._bounds(drawn, bbox_inches, pad_inches), None if transparent else "#FFFFFF")
         if format == "svg":
             path.write_text(svg)
         elif format in ("pdf", "png"):
@@ -136,14 +133,14 @@ class Figure(Group):
             raise ValueError(f"unknown format {format!r}: svg, pdf or png")
         return path
 
-    def _bounds(self, bbox_inches, pad):
+    def _bounds(self, drawn, bbox_inches, pad):
         if bbox_inches != "tight":
             w, h = self.figsize
             return (0.0, w, 0.0, h)
-        points = np.concatenate([m.get_all_points() for m in self.drawn()] or [np.zeros((1, 3))])
+        points = np.concatenate([m.get_all_points() for m in drawn] or [np.zeros((1, 3))])
         lo, hi = points.min(axis=0), points.max(axis=0)
         # strokes reach half their width beyond their points
-        reach = max((0.005 * m.stroke_width for m in self.drawn() if isinstance(m, VMobject)), default=0)
+        reach = max((0.005 * m.stroke_width for m in drawn if isinstance(m, VMobject)), default=0)
         return (lo[0] - pad - reach, hi[0] + pad + reach, lo[1] - pad - reach, hi[1] + pad + reach)
 
     def show(self, size=(1200, 800)):
@@ -161,10 +158,6 @@ class Figure(Group):
                     image.scale(min(0.95 * config.frame_width / image.width, 0.95 * config.frame_height / image.height))
                     scene.add(image)
             build([Preview], background=(1, 1, 1, 1)).play(title="figure", size=size)
-
-
-def figure(figsize=(3.5, 2.5), **kwargs) -> Figure:
-    return Figure(figsize, **kwargs)
 
 
 def subplots(nrows: int = 1, ncols: int = 1, figsize=(3.5, 2.5), wspace: float = 0.1, hspace: float = 0.1,
@@ -193,21 +186,21 @@ def _num(v: float) -> str:
 
 def _path_data(points: np.ndarray, x0: float, y1: float) -> str:
     """SVG path data of cubic curves (4 points each), in points from the top left."""
-    pts = points[: 4 * (len(points) // 4), :2]
-    X = (pts[:, 0] - x0) * _POINTS
-    Y = (y1 - pts[:, 1]) * _POINTS
-    parts, start, last = [], None, None
-    for k in range(0, len(pts), 4):
-        a = (X[k], Y[k])
-        if last is None or abs(a[0] - last[0]) > 1e-6 or abs(a[1] - last[1]) > 1e-6:
-            if start is not None and last is not None and abs(last[0] - start[0]) < 1e-6 and abs(last[1] - start[1]) < 1e-6:
-                parts.append("Z")
-            parts.append(f"M{_num(a[0])} {_num(a[1])}")
-            start = a
-        parts.append("C" + " ".join(f"{_num(X[k + i])} {_num(Y[k + i])}" for i in (1, 2, 3)))
-        last = (X[k + 3], Y[k + 3])
-    if start is not None and last is not None and abs(last[0] - start[0]) < 1e-6 and abs(last[1] - start[1]) < 1e-6:
-        parts.append("Z")
+    curves = (points[: 4 * (len(points) // 4), :2].reshape(-1, 4, 2) - [x0, y1]) * [_POINTS, -_POINTS]
+    if not len(curves):
+        return ""
+    # a curve starting away from the end of the one before begins a subpath
+    moves = np.ones(len(curves), dtype=bool)
+    moves[1:] = (np.abs(curves[1:, 0] - curves[:-1, 3]) > 1e-6).any(1)
+    first = np.flatnonzero(moves)
+    last = np.append(first[1:], len(curves)) - 1
+    closed = (np.abs(curves[last, 3] - curves[first, 0]) < 1e-6).all(1)
+    parts = []
+    for a, b, z in zip(first, last, closed):
+        parts.append(f"M{_num(curves[a, 0, 0])} {_num(curves[a, 0, 1])}")
+        parts.extend("C" + " ".join(f"{_num(x)} {_num(y)}" for x, y in c[1:]) for c in curves[a:b + 1])
+        if z:
+            parts.append("Z")
     return "".join(parts)
 
 

@@ -43,7 +43,6 @@ class Video:
             raise RuntimeError("writing videos needs ffmpeg: pip install 'llandau[video]', or put ffmpeg on the PATH")
         self.path = Path(path)
         self.size = (int(size[0]), int(size[1]))
-        self.frames = 0
         width, height = self.size
         self.process = subprocess.Popen([
             ffmpeg, "-y", "-loglevel", "error",
@@ -66,7 +65,6 @@ class Video:
             self.process.stdin.write(np.ascontiguousarray(frame).tobytes())
         except BrokenPipeError:
             self._fail()
-        self.frames += 1
 
     def close(self) -> str:
         """Finish the file; returns its path."""

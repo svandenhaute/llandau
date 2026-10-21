@@ -100,6 +100,25 @@ def test_svg_strokes_scale_with_stretching(tmp_path):
     assert scaled.submobjects[0].stroke_width == pytest.approx(100 * 3 * 2.0 / 240, rel=1e-3)
 
 
+def test_errorbar_takes_a_scalar_error():
+    _, ax = subplots(figsize=(3.0, 2.0))
+    bars, _ = ax.errorbar([0.0, 1.0, 2.0], [1.0, 2.0, 1.5], yerr=0.05, xerr=[0.1, 0.1, 0.1], capsize=2)
+    ax._ensure()
+    assert len(bars.submobjects) == 1 and bars.submobjects[0].get_num_curves() == 2 * 3 * 3  # bars and caps
+    assert ax.get_ylim()[0] < 0.95 and ax.get_ylim()[1] > 2.05
+
+
+def test_legend_handle_is_dashed():
+    _, ax = subplots(figsize=(3.0, 2.0))
+    ax.plot([0, 1], [0, 1], ls="--", label="dashed")
+    ax.plot([0, 1], [1, 0], label="solid")
+    legend = ax.legend()
+    ax._ensure()
+    rows = legend.submobjects[-1]
+    dashed, solid = (rows[k][0][0] for k in range(2))
+    assert len(dashed.get_subpaths()) > 1 and len(solid.get_subpaths()) == 1
+
+
 def test_tick_labels_stay_with_their_ticks():
     fig, ax = subplots(figsize=(3.0, 2.0))
     ax.plot([2, 50], [1, 2])

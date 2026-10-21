@@ -1,7 +1,7 @@
 """Colours, font and type scale. Change these in one place for the whole deck."""
 from dataclasses import dataclass
 
-from .mobject import BLACK, WHITE, GRAY, DARK_GRAY, ManimColor
+from .mobject import BLACK, WHITE, ManimColor
 
 __all__ = [
     "Theme", "DARK", "LIGHT", "use", "current",
@@ -21,11 +21,10 @@ LABEL = 20
 class Theme:
     bg: ManimColor
     fg: ManimColor
-    dim: ManimColor  # de-emphasised text, e.g. greyed-out parts of an equation
 
 
-DARK = Theme(bg=BLACK, fg=WHITE, dim=DARK_GRAY)
-LIGHT = Theme(bg=WHITE, fg=BLACK, dim=GRAY)
+DARK = Theme(bg=BLACK, fg=WHITE)
+LIGHT = Theme(bg=WHITE, fg=BLACK)
 
 _current = DARK
 

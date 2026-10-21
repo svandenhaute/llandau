@@ -24,6 +24,8 @@ __all__ = ["Scene", "build", "always_redraw", "ValueTracker"]
 FPS = 60
 # samples of a rate function
 RATE_SAMPLES = 257
+# a step must not be empty: the wait that shows what a step only adds
+MIN_STEP = 0.05
 
 
 class ValueTracker(Mobject):
@@ -116,8 +118,7 @@ class _Builder:
         self.open: dict[int, tuple] = {}
         self.claimed: set[int] = set()
         self.play_span = (0.0, 0.0)
-        self.scene = None
-        self.marks = 0
+        self.scene = None  # the scene running now (build)
         # live views: one viewer per (scene, theme); spans waiting for their step's end
         self.viewers = {}
         self.pending_lives = []
@@ -162,11 +163,12 @@ class _Builder:
         return placement
 
     def geometry(self, m) -> tuple[str, int] | None:
+        """(clip kind, geometry id) that shows m as it is."""
         if isinstance(m, ImageMobject):
             return ("image", self.placement(m))
         if isinstance(m, VMobject):
             shape = self.shape(m, visible_only=True)
-            return None if shape is None else ("shape", shape)
+            return None if shape is None else ("show", shape)
         return None
 
     def rate(self, function) -> int | None:
@@ -202,13 +204,14 @@ class _Builder:
     def z_of(self, mobject):
         """z(i, n) for the i-th of n parts that `mobject` turns into."""
         scene = self.scene
+        mine = [m for m in mobject.family_members_with_points() if _drawable(m)]
+        head = id(mine[0]) if mine else None
         for top in scene.mobjects:
             parts = [m for m in top.family_members_with_points() if _drawable(m)]
             ids = [id(m) for m in parts]
-            mine = [m for m in mobject.family_members_with_points() if _drawable(m)]
-            if top is mobject or (mine and id(mine[0]) in ids):
+            if top is mobject or head in ids:
                 base = self.z_index(scene, top)
-                first = ids.index(id(mine[0])) if mine and id(mine[0]) in ids else 0
+                first = ids.index(head) if head in ids else 0
                 count, size = len(parts), max(len(mine), 1)
                 lifts = [self.lift(top, m) for m in mine] or [0.0]
 
@@ -240,8 +243,7 @@ class _Builder:
     def close(self, key, t: float):
         part, kind, geometry, z, start = self.open.pop(key)
         if t > start:
-            clip_kind = "image" if kind == "image" else "show"
-            self.slides.add_clip(clip_kind, geometry, geometry, z, start, t, (start, start))
+            self.slides.add_clip(kind, geometry, geometry, z, start, t, (start, start))
 
     def close_all(self, t: float):
         for key in list(self.open):
@@ -278,11 +280,8 @@ class _Builder:
             return
         # a raster image and a vector shape: switch halfway
         mid = (window[0] + window[1]) / 2
-        for m, (t0, t1) in ((a, (start, mid)), (b, (mid, end))):
-            geometry = self.geometry(m)
-            if geometry is not None and t1 > t0:
-                kind = "image" if geometry[0] == "image" else "show"
-                self.slides.add_clip(kind, geometry[1], geometry[1], z, t0, t1, (t0, t0))
+        self.show(a, z, start, mid)
+        self.show(b, z, mid, end)
 
     def partial(self, kind, leaf, z, clock, rate, reverse=False):
         start, end = self.play_span
@@ -295,12 +294,11 @@ class _Builder:
     def show(self, leaf, z, t0: float, t1: float):
         geometry = self.geometry(leaf)
         if geometry is not None and t1 > t0:
-            kind = "image" if geometry[0] == "image" else "show"
-            self.slides.add_clip(kind, geometry[1], geometry[1], z, t0, t1, (t0, t0))
+            kind, g = geometry
+            self.slides.add_clip(kind, g, g, z, t0, t1, (t0, t0))
 
     def mark(self, t: float, slide: int, notes: str):
         self.slides.add_mark(t, slide, notes)
-        self.marks += 1
         for viewer, rect, start, enter, camera in self.pending_lives:
             self.slides.add_live(viewer, rect, start, t, enter, camera)
         self.pending_lives = []
@@ -445,7 +443,6 @@ class Scene:
                     a._build_timings()
         duration = max((a.get_run_time() for a in animations), default=0.0)
         start, end = self.time, self.time + duration
-        builder.scene = self
         builder.sync(self, start)
         for a in animations:
             a._setup_scene(self)
@@ -490,16 +487,10 @@ class Scene:
         return self
 
     def wait(self, duration: float = 1.0, stop_condition=None, frozen_frame=None, **kwargs):
-        builder = self._builder
-        builder.scene = self
-        builder.sync(self, self.time)
         if self._has_updaters() and not frozen_frame:
-            steps = max(1, math.ceil(duration * FPS))
-            for k in range(1, steps + 1):
-                self._update(duration / steps)
-                builder.sync(self, self.time + duration * k / steps)
+            return self.play(Wait(duration))  # steps the updaters
+        self._builder.sync(self, self.time)
         self.time += duration
-        builder.sync(self, self.time)
         return self
 
     def pause(self, duration: float = 1.0):
@@ -508,11 +499,8 @@ class Scene:
     def next_slide(self, notes: str = "", **kwargs):
         """End the current step: the presentation pauses here. `notes` belong to
         the step that starts here (as in manim-slides)."""
-        builder = self._builder
-        builder.scene = self
-        builder.sync(self, self.time)
         if self.time > self._slide_start and self.time != self._last_mark:
-            builder.mark(self.time, self._slide, self._notes)
+            self._builder.mark(self.time, self._slide, self._notes)
             self._last_mark = self.time
             self._notes = notes
         else:
@@ -544,18 +532,15 @@ def build(scenes, background=None):
         scene = scene() if isinstance(scene, type) else scene
         scene._slide = index
         scene.time = scene._slide_start = t
+        scene.setup()
         if builder is None:
-            scene.setup()
-            bg = background if background is not None else Color(scene.camera.background_color).to_rgba()
-            builder = _Builder(bg)
-        else:
-            scene.setup()
+            builder = _Builder(background if background is not None else Color(scene.camera.background_color).to_rgba())
         scene._builder = builder
         builder.scene = scene
         builder.sync(scene, t)
         scene.construct()
         if scene.time <= scene._slide_start or builder.pending_lives:
-            scene.wait(0.05)  # a slide (or live step) that only adds things still shows them
+            scene.wait(MIN_STEP)  # a slide (or live step) that only adds things still shows them
         scene.next_slide()  # the end of the last step
         # a background other than the deck's (set in setup or construct): a rectangle behind everything
         bg = Color(scene.camera.background_color).to_rgba()

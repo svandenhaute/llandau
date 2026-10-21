@@ -23,10 +23,8 @@ Consecutive steps of the same scene keep everything else, including where the
 presenter turned it.
 
 In the player: drag rotates, right drag pans, the wheel scrubs frames, pinch or
-ctrl + wheel zooms, a double click resets the camera. Keys (? shows them over
-the view): P plays, , and . step frames, D discrete states, + and - zoom, 0
-resets the camera, L lit / flat, S atoms / protein (shift: side chains), C next
-coloring, 1-9 layers, G large plots; the arrows still change steps. Exported
+ctrl + wheel zooms, a double click resets the camera; ? over the view shows
+every key (the explorer's, with the arrows still changing steps). Exported
 (llandau pdf), a live step shows a still image of its 3D view (without plots).
 """
 from __future__ import annotations
@@ -34,8 +32,10 @@ from __future__ import annotations
 __all__ = ["live_scene", "VIEW_KEYS"]
 
 SCENES = {}
-VIEW_KEYS = {"camera", "frame", "style", "sidechains", "shading", "fog", "occlusion", "coloring", "scrub_discrete", "show", "hide",
-             "plots"}
+# view key -> viewer attribute, in the order applied (frame after scrub_discrete)
+_ATTRIBUTES = {"style": "style", "sidechains": "sidechains", "shading": "shading", "fog": "fog", "occlusion": "occlusion",
+               "coloring": "coloring", "scrub_discrete": "scrub_discrete", "frame": "frame", "plots": "show_plots"}
+VIEW_KEYS = set(_ATTRIBUTES) | {"show", "hide", "camera"}
 
 
 def live_scene(name: str):
@@ -55,21 +55,13 @@ def build(viewer, scene: str):
 
 def apply_view(viewer, view: dict, camera: bool = True):
     """Apply a view's settings; the camera only with `camera` (else it is animated by the caller)."""
-    for key in ("style", "sidechains", "shading", "fog", "occlusion"):
+    for key, attribute in _ATTRIBUTES.items():
         if key in view:
-            setattr(viewer, key, view[key])
-    if "coloring" in view:
-        viewer.coloring = view["coloring"]
-    if "scrub_discrete" in view:
-        viewer.scrub_discrete = view["scrub_discrete"]
+            setattr(viewer, attribute, bool(view[key]) if key == "plots" else view[key])
     for layer in view.get("show", []):
         viewer.set_visible(layer, True)
     for layer in view.get("hide", []):
         viewer.set_visible(layer, False)
-    if "frame" in view:
-        viewer.frame = view["frame"]
-    if "plots" in view:
-        viewer.show_plots = bool(view["plots"])
     if camera and "camera" in view:
         viewer.camera = view["camera"]
 

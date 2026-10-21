@@ -15,6 +15,7 @@ from .mobject import (
     VMobject, config,
 )
 from .shapes import DashedLine, Dot, Line, Polygon, _Tip
+from .text import _minus
 
 __all__ = ["NumberLine", "Axes", "NumberPlane", "ParametricFunction", "FunctionGraph"]
 
@@ -29,10 +30,7 @@ def _decimal_places(step: float) -> int:
 
 
 def _number_text(value: float, places: int) -> str:
-    s = f"{value:.{places}f}"
-    if s.startswith("-"):
-        s = "−" + s[1:]
-    return s
+    return _minus(f"{value:.{places}f}")
 
 
 def _labels(strings, size):

@@ -23,11 +23,13 @@ from __future__ import annotations
 
 import contextlib
 import math
+from functools import cache
 
 import numpy as np
 
 from . import theme
-from .mobject import DOWN, LEFT, ORIGIN, PI, RIGHT, UP, Color, Group, ImageMobject, VGroup, VMobject, config
+from .mobject import DOWN, LEFT, ORIGIN, PI, RIGHT, UP, Color, Group, ImageMobject, VGroup, VMobject, _corners
+from .text import _minus
 
 __all__ = ["Plot", "COLORS", "colormap"]
 
@@ -109,79 +111,61 @@ def tick_labels(ticks) -> tuple[list[str], int]:
     labels = []
     for v in ticks:
         s = f"{v:.{places}f}"
-        if s.startswith("-"):
-            s = "−" + s[1:] if float(s) != 0 else s[1:]
-        labels.append(s)
+        labels.append(_minus(s.lstrip("-") if float(s) == 0 else s))  # no "-0"
     return labels, power
 
 
 # --- geometry ----------------------------------------------------------------------
 
+def _inside(points: np.ndarray, box) -> bool:
+    """All points (at least one) finite and within box (x0, x1, y0, y1)."""
+    lo, hi = points.min(0), points.max(0)  # NaN or inf: a comparison fails
+    return bool(lo[0] >= box[0] and hi[0] <= box[1] and lo[1] >= box[2] and hi[1] <= box[3])
+
+
 def _clip_polyline(points: np.ndarray, box) -> list[np.ndarray]:
     """Runs of a polyline inside box (x0, x1, y0, y1); NaN points break it."""
+    if len(points) > 1 and _inside(points, box):
+        return [points]
     x0, x1, y0, y1 = box
-    runs, current = [], []
-    for a, b in zip(points[:-1], points[1:]):
-        if not (np.all(np.isfinite(a)) and np.all(np.isfinite(b))):
-            if len(current) > 1:
-                runs.append(np.array(current))
-            current = []
-            continue
-        # Liang-Barsky
-        d = b - a
-        t0, t1 = 0.0, 1.0
-        ok = True
-        for p, q in ((-d[0], a[0] - x0), (d[0], x1 - a[0]), (-d[1], a[1] - y0), (d[1], y1 - a[1])):
-            if p == 0:
-                if q < 0:
-                    ok = False
-                    break
-            else:
-                r = q / p
-                if p < 0:
-                    t0 = max(t0, r)
-                else:
-                    t1 = min(t1, r)
-        if not ok or t0 > t1:
-            if len(current) > 1:
-                runs.append(np.array(current))
-            current = []
-            continue
-        start, end = a + t0 * d, a + t1 * d
-        if current and np.allclose(current[-1], start):
-            current.append(end)
-        else:
-            if len(current) > 1:
-                runs.append(np.array(current))
-            current = [start, end]
-        if t1 < 1:
-            runs.append(np.array(current))
-            current = []
-    if len(current) > 1:
-        runs.append(np.array(current))
-    return runs
+    a, b = points[:-1], points[1:]
+    d = b - a
+    # Liang-Barsky: the parameters t0..t1 of each segment inside the box
+    ok = np.isfinite(a).all(1) & np.isfinite(b).all(1)
+    t0, t1 = np.zeros(len(a)), np.ones(len(a))
+    with np.errstate(all="ignore"):
+        for p, q in ((-d[:, 0], a[:, 0] - x0), (d[:, 0], x1 - a[:, 0]),
+                     (-d[:, 1], a[:, 1] - y0), (d[:, 1], y1 - a[:, 1])):
+            r = q / p
+            t0 = np.where(p < 0, np.maximum(t0, r), t0)
+            t1 = np.where(p > 0, np.minimum(t1, r), t1)
+            ok &= ~((p == 0) & (q < 0))
+    ok &= t0 <= t1
+    index = np.flatnonzero(ok)
+    if not len(index):
+        return []
+    # a run goes on while the segment before ended inside, at its own end
+    first = np.concatenate([[True], ~ok[index[1:] - 1] | (t1[index[1:] - 1] < 1)])
+    starts, ends = a + t0[:, None] * d, a + t1[:, None] * d
+    return [np.vstack([starts[run[0]], ends[run]]) for run in np.split(index, np.flatnonzero(first)[1:])]
 
 
 def _clip_polygon(points: np.ndarray, box) -> np.ndarray:
     """Sutherland-Hodgman: the polygon's part inside box (x0, x1, y0, y1)."""
     x0, x1, y0, y1 = box
-    edges = [(0, x0, 1), (0, x1, -1), (1, y0, 1), (1, y1, -1)]
-    poly = [p for p in points if np.all(np.isfinite(p))]
-    for dim, value, sign in edges:
-        if not poly:
+    poly = points[np.isfinite(points).all(1)]
+    if len(poly) and _inside(poly, box):
+        return poly
+    for dim, value, sign in ((0, x0, 1), (0, x1, -1), (1, y0, 1), (1, y1, -1)):
+        if not len(poly):
             break
-        out = []
-        for i, current in enumerate(poly):
-            previous = poly[i - 1]
-            inside_c = sign * (current[dim] - value) >= 0
-            inside_p = sign * (previous[dim] - value) >= 0
-            if inside_c != inside_p:
-                t = (value - previous[dim]) / (current[dim] - previous[dim])
-                out.append(previous + t * (current - previous))
-            if inside_c:
-                out.append(current)
-        poly = out
-    return np.array(poly)
+        previous = np.roll(poly, 1, axis=0)
+        inside = sign * (poly[:, dim] - value) >= 0
+        crossing = inside != np.roll(inside, 1)
+        # where an edge crosses, its crossing point comes before its vertex
+        t = (value - previous[:, dim]) / np.where(crossing, poly[:, dim] - previous[:, dim], 1)
+        poly = np.stack([previous + t[:, None] * (poly - previous), poly], 1)[np.column_stack([crossing, inside])]
+    return poly
 
 
 def _offset_polygon(poly: np.ndarray, d: float) -> np.ndarray:
@@ -242,17 +226,18 @@ def simplify(points: np.ndarray, tolerance: float) -> np.ndarray:
     return points[keep]
 
 
-def _corners(points: np.ndarray, closed: bool = False) -> np.ndarray:
-    """Cubic curves (4 points each) along a polyline (n, 2) -> (4(n-1), 3)."""
-    p = np.asarray(points, dtype=float)
-    if closed:
-        p = np.vstack([p, p[:1]])
-    a, b = p[:-1], p[1:]
-    out = np.empty((len(a), 4, 3))
-    out[..., 2] = 0
-    for k, t in enumerate((0, 1 / 3, 2 / 3, 1)):
-        out[:, k, :2] = a + t * (b - a)
-    return out.reshape(-1, 3)
+def _stroke_mob(runs, color: Color, lw: float, cap: str = "butt", join: str = "round") -> VMobject:
+    """One mobject stroking the polyline runs in color (its alpha as the opacity)."""
+    m = VMobject(stroke_color=color, stroke_width=lw, stroke_opacity=color.alpha, cap_style=cap, joint_type=join)
+    m.stroke_color.alpha = 1
+    return m.set_points(np.concatenate([_corners(r) for r in runs]))
+
+
+def _fill_mob(polys, face: Color, edge=None, lw: float = 0.0, join: str = "round") -> VMobject:
+    """One mobject filling the polygons with face (its alpha as the opacity), edged in edge."""
+    m = VMobject(fill_color=face, fill_opacity=face.alpha, stroke_color=edge, stroke_width=lw, joint_type=join)
+    m.fill_color.alpha = 1
+    return m.set_points(np.concatenate([_corners(p, closed=True) for p in polys]))
 
 
 def _dashes(run: np.ndarray, pattern) -> list[np.ndarray]:
@@ -282,6 +267,7 @@ def _dashes(run: np.ndarray, pattern) -> list[np.ndarray]:
 _K = 0.5522847498  # circle by four cubics
 
 
+@cache
 def _marker_curves(marker: str) -> tuple[np.ndarray, bool]:
     """A marker of diameter 1 at the origin: cubic points (4 per curve, 2D), and
     whether it is filled (else stroked only)."""
@@ -354,6 +340,16 @@ def _rgba(color, alpha=None) -> Color:
     return c
 
 
+def _range(values, vmin, vmax) -> tuple[float, float]:
+    """A colormap's range: vmin..vmax, by default the values' extent."""
+    return (float(np.nanmin(values)) if vmin is None else vmin, float(np.nanmax(values)) if vmax is None else vmax)
+
+
+def _norm(values, lo, hi) -> np.ndarray:
+    """values -> [0, 1] over lo..hi."""
+    return np.clip((values - lo) / (hi - lo), 0, 1) if hi > lo else np.full_like(values, 0.5)
+
+
 # --- artists ----------------------------------------------------------------------------
 
 class Artist(VGroup):
@@ -403,7 +399,6 @@ class Plot(VGroup):
                  box: bool = True, ticks: str = "in", style: dict | None = None, tick_fontsize: float | None = None,
                  legend_fontsize: float | None = None, font: str | None = None, background=None):
         super().__init__()
-        from .theme import SMALL
         self.region = region
         self.xlim, self.ylim = xlim, ylim
         self.xlabel, self.ylabel, self.title_text = xlabel, ylabel, title
@@ -413,7 +408,7 @@ class Plot(VGroup):
         self.xticklabels, self.yticklabels = xticklabels, yticklabels
         self.aspect = aspect
         self.scale_factor = scale
-        self.fontsize = fontsize or SMALL
+        self.fontsize = fontsize or theme.SMALL
         self.tick_fontsize = tick_fontsize or 0.85 * self.fontsize
         self.legend_fontsize = legend_fontsize or 0.8 * self.fontsize
         self.font = font
@@ -515,14 +510,14 @@ class Plot(VGroup):
         if names is not None:
             labels = [name for name, keep in zip(names, shown) if keep]  # with their ticks
         elif log:
-            labels = [f"$10^({int(round(math.log10(v)))})$".replace("^(-", "^(−") for v in major]
+            labels = [f"$10^({_minus(str(round(math.log10(v))))})$" for v in major]
         else:
             labels, power = tick_labels(major)
         return major, minor, labels, power
 
     def _layout(self):
-        from .shapes import Line, Rectangle
-        from .text import text, texts
+        from .shapes import Line
+        from .text import texts
         rc = self.rc
         r = self.region
         xlim, ylim = self._limits(0), self._limits(1)
@@ -609,7 +604,7 @@ class Plot(VGroup):
         numbers = VGroup(*xl, *yl)
         for power, dim in ((xpower, 0), (ypower, 1)):
             if power:
-                factor = self._text(f"$times 10^({power})$".replace("^(-", "^(−"), size=tick_size)
+                factor = self._text(f"$times 10^({_minus(str(power))})$", size=tick_size)
                 if dim == 0:
                     factor.next_to([x1, y0 - out_tick - pad - tick_h, 0], DOWN, buff=pad, aligned_edge=RIGHT)  # noqa
                 else:
@@ -625,7 +620,6 @@ class Plot(VGroup):
         if title:
             title.move_to([(x0 + x1) / 2, y1 + labelpad + label_descent, 0], aligned_edge=DOWN)
             frame.add(title)
-        self.frame = frame
         self.add(frame)
         for a in self.artists:
             a.draw()
@@ -798,39 +792,27 @@ class Plot(VGroup):
     def _draw_line(self, a: Artist):
         s, d = a.style, a.data
         pts = self._to_frame(d["x"], d["y"])
-        alpha = s["alpha"]
-        color = _rgba(s["color"], alpha)
-        dashes = _DASHES.get(s["ls"], None) if isinstance(s["ls"], str) else s["ls"]
-        if dashes != "none":
-            runs = [simplify(run, self.pt(SIMPLIFY)) for run in _clip_polyline(pts, self.clip)]
-            if dashes:
-                pattern = [self.pt(v * s["lw"]) for v in dashes]
-                runs = [d_ for run in runs for d_ in _dashes(run, pattern)]
-            if runs:
-                line = VMobject(stroke_color=color, stroke_width=self.lw(s["lw"]), stroke_opacity=color.alpha,
-                                joint_type="round", cap_style="butt" if dashes else "round")
-                line.stroke_color.alpha = 1
-                line.set_points(np.concatenate([_corners(run) for run in runs if len(run) > 1]))
-                a.add(line)
+        self._stroke(a, pts, s, simplified=True, cap="round")
         if s["marker"]:
             face = s["mfc"] if s["mfc"] is not None else s["color"]
-            a.add(self._markers(pts, s["marker"], s["ms"], [face], s["mec"], s["mew"], alpha, clip=self.clip))
+            a.add(self._markers(pts, s["marker"], s["ms"], face, s["mec"], s["mew"], s["alpha"], clip=self.clip))
 
-    def _markers(self, pts, marker, size_pt, faces, edge, edge_width, alpha, split: bool = False,
+    def _markers(self, pts, marker, size_pt, face, edge, edge_width, alpha, split: bool = False,
                  clip=None) -> VGroup:
-        """Markers of diameter size_pt at pts; faces: one color, or one per point.
-        One mobject per color (or per point with split) painting its markers in turn,
-        a later marker above the earlier ones it overlaps. With clip (x0, x1, y0, y1),
-        markers beyond it are left out and markers crossing it are cut to it."""
+        """Markers of diameter size_pt (one, or one per point) at pts; face: one color, or
+        RGBA (n, 4), one per point. One mobject per color (or per point with split)
+        painting its markers in turn, a later marker above the earlier ones it overlaps.
+        With clip (x0, x1, y0, y1), markers beyond it are left out and markers crossing
+        it are cut to it."""
         unit, filled = _marker_curves(marker)
         if marker == ".":
             size_pt = size_pt * 0.5
-        size = self.pt(size_pt)
+        pts = np.asarray(pts, dtype=float).reshape(-1, 2)
+        size = np.broadcast_to(self.pt(np.asarray(size_pt, dtype=float)), len(pts))
         stroked = not filled or (edge not in (None, "none") and edge_width > 0)
         width = 0.01 * self.lw(edge_width if filled else max(edge_width, 1.0)) if stroked else 0.0
-        pts = np.asarray(pts, dtype=float).reshape(-1, 2)
-        faces = [faces[0]] * len(pts) if len(faces) == 1 else list(faces)
-        keys = [Color(f).to_hex() + f"{Color(f).alpha:.2f}" for f in faces]
+        per_point = isinstance(face, np.ndarray) and face.ndim == 2
+        keys = list(map(bytes, (face * 255).round().astype(np.uint8))) if per_point else [None] * len(pts)
         keep = np.isfinite(pts).all(axis=1)
         cut = np.zeros(len(pts), dtype=bool)
         reach = size * np.hypot(unit[:, 0], unit[:, 1]).max() + width / 2
@@ -842,30 +824,30 @@ class Plot(VGroup):
         for i in np.flatnonzero(cut | split):
             keys[i] = int(i)  # a mobject of its own
         index = np.flatnonzero(keep)
-        layers = [0] * len(index) if split else _layers(pts[index], [keys[i] for i in index], 2 * reach)
+        layers = [0] * len(index) if split else _layers(pts[index], [keys[i] for i in index], 2 * reach.max(initial=0))
         buckets = {}
         for i, layer in zip(index, layers):
             buckets.setdefault((layer, keys[i]), []).append(i)
         group = VGroup()
         for (_, key), indices in sorted(buckets.items(), key=lambda b: (b[0][0], b[1][0])):
-            face = _rgba(faces[indices[0]], alpha)
-            edge_color = _rgba(edge if edge not in (None, "face") else faces[indices[0]], alpha)
-            if cut[indices[0]]:
-                group.add(VGroup(*self._cut_marker(pts[indices[0]], marker, size, face,
+            first = indices[0]
+            own = face[first] if per_point else face
+            face_color = _rgba(own, alpha)
+            edge_color = _rgba(edge if edge not in (None, "face") else own, alpha)
+            if cut[first]:
+                group.add(VGroup(*self._cut_marker(pts[first], marker, size[first], face_color,
                                                    edge_color if filled else None, width, clip)))
                 continue
-            curves = np.concatenate([unit * size + pts[i] for i in indices])
-            points = np.zeros((len(curves), 3))
-            points[:, :2] = curves
+            points = np.zeros((len(indices) * len(unit), 3))
+            points[:, :2] = (unit[None] * size[indices, None, None] + pts[indices, None]).reshape(-1, 2)
             if filled:
-                m = VMobject(fill_color=face, fill_opacity=face.alpha, stroke_color=edge_color,
+                m = VMobject(fill_color=face_color, fill_opacity=face_color.alpha, stroke_color=edge_color,
                              stroke_width=100 * width, stroke_opacity=edge_color.alpha, joint_type="round",
                              stacked=True)
             else:
-                m = VMobject(stroke_color=face, stroke_width=100 * width, stroke_opacity=face.alpha,
+                m = VMobject(stroke_color=face_color, stroke_width=100 * width, stroke_opacity=face_color.alpha,
                              cap_style="round")
-            m.fill_color.alpha = 1
-            m.stroke_color.alpha = 1
+            m.fill_color.alpha = m.stroke_color.alpha = 1
             group.add(m.set_points(points))
         return group
 
@@ -875,11 +857,7 @@ class Plot(VGroup):
         of the given width; edge None: the face is the stroke)."""
         def fill(color, polygons):
             polygons = [p for p in (_clip_polygon(p, clip) for p in polygons) if len(p) >= 3]
-            if not polygons or color.alpha == 0:
-                return []
-            m = VMobject(fill_color=color, fill_opacity=color.alpha, stroke_width=0)
-            m.fill_color.alpha = 1
-            return [m.set_points(np.concatenate([_corners(p, closed=True) for p in polygons]))]
+            return [_fill_mob(polygons, color)] if polygons and color.alpha != 0 else []
 
         parts = [p * size + center for p in _marker_outline(marker)]
         if edge is None:
@@ -917,36 +895,24 @@ class Plot(VGroup):
         )
         _unused(kwargs, "scatter", style)
         data = {"x": x, "y": y, "ex": x, "ey": y, "pts": (x, y)}
+        if values is not None:
+            data["range"] = _range(values, vmin, vmax)
         return self._add(Artist(self, "scatter", data, style, label))
-
-    def _norm(self, values, vmin, vmax):
-        lo = np.nanmin(values) if vmin is None else vmin
-        hi = np.nanmax(values) if vmax is None else vmax
-        return (values - lo) / (hi - lo) if hi > lo else np.full_like(values, 0.5), lo, hi
 
     def _draw_scatter(self, a: Artist):
         st, d = a.style, a.data
         pts = self._to_frame(d["x"], d["y"])
         finite = np.isfinite(pts).all(axis=1)
         if st["values"] is not None:
-            norm, lo, hi = self._norm(st["values"], st["vmin"], st["vmax"])
-            st["range"] = (lo, hi)
-            rgba = colormap(st["cmap"])(np.clip(norm, 0, 1))
+            rgba = colormap(st["cmap"])(_norm(st["values"], *d["range"]))
             if not st["split"]:
                 rgba = np.round(rgba * 63) / 63  # one mobject per color: 64 levels per channel
-            faces = [Color(v) for v in rgba[finite]]
+            face = rgba[finite]
         else:
-            faces = [st["c"]]
-        sizes = np.broadcast_to(np.asarray(st["s"], dtype=float), d["x"].shape)[finite]
-        p = pts[finite]
-        if np.allclose(sizes, sizes[0] if len(sizes) else 0):
-            a.add(*self._markers(p, st["marker"], math.sqrt(sizes[0]) if len(sizes) else 1, faces, st["edge"],
-                                 st["lw"], st["alpha"], st["split"], clip=self.clip))
-        else:
-            for i in range(len(p)):
-                a.add(*self._markers(p[i:i + 1], st["marker"], math.sqrt(sizes[i]),
-                                     [faces[i] if len(faces) > 1 else faces[0]], st["edge"], st["lw"], st["alpha"],
-                                     clip=self.clip))
+            face = st["c"]
+        sizes = np.sqrt(np.broadcast_to(np.asarray(st["s"], dtype=float), d["x"].shape)[finite])
+        a.add(*self._markers(pts[finite], st["marker"], sizes, face, st["edge"], st["lw"], st["alpha"], st["split"],
+                             clip=self.clip))
 
     def fill_between(self, x, y1, y2=0, color=None, alpha=None, label=None, lw: float = 0, edgecolor=None,
                      **kwargs) -> Artist:
@@ -964,14 +930,9 @@ class Plot(VGroup):
         top = self._to_frame(d["x"], d["y1"])
         bottom = self._to_frame(d["x"], d["y2"])[::-1]
         poly = _clip_polygon(np.vstack([top, bottom]), self.clip)
-        if len(poly) < 3:
-            return
-        color = _rgba(st["color"], st["alpha"] if st["alpha"] is not None else Color(st["color"]).alpha)
-        edge = _rgba(st["edge"] or st["color"])
-        m = VMobject(fill_color=color, fill_opacity=color.alpha, stroke_color=edge,
-                     stroke_width=self.lw(st["lw"]), joint_type="round")
-        m.fill_color.alpha = 1
-        a.add(m.set_points(_corners(poly, closed=True)))
+        if len(poly) >= 3:
+            face, edge = _rgba(st["color"], st["alpha"]), _rgba(st["edge"] or st["color"])
+            a.add(_fill_mob([poly], face, edge, self.lw(st["lw"])))
 
     def axhline(self, y: float = 0, xmin: float = 0, xmax: float = 1, **kwargs) -> Artist:
         return self._axline(1, y, xmin, xmax, **kwargs)
@@ -1001,17 +962,22 @@ class Plot(VGroup):
             pts = np.array([[X, y0 + lo * (y1 - y0)], [X, y0 + hi * (y1 - y0)]])
         self._stroke(a, pts, st)
 
-    def _stroke(self, a, pts, st):
-        color = _rgba(st["color"], st["alpha"])
+    def _stroke(self, a, pts, st, simplified: bool = False, cap: str = "butt"):
+        """A line through pts (frame units) in st's color, lw, ls and alpha, clipped to the box."""
         dashes = _DASHES.get(st["ls"]) if isinstance(st["ls"], str) else st["ls"]
+        if dashes == "none":
+            return
         runs = _clip_polyline(pts, self.clip)
-        if dashes and dashes != "none":
-            runs = [d for run in runs for d in _dashes(run, [self.pt(v * st["lw"]) for v in dashes])]
+        if simplified:
+            runs = [simplify(r, self.pt(SIMPLIFY)) for r in runs]
+        if dashes:
+            runs = self._dashed(runs, dashes, st["lw"])
         if runs:
-            m = VMobject(stroke_color=color, stroke_width=self.lw(st["lw"]), stroke_opacity=color.alpha,
-                         cap_style="butt", joint_type="round")
-            m.stroke_color.alpha = 1
-            a.add(m.set_points(np.concatenate([_corners(r) for r in runs])))
+            a.add(_stroke_mob(runs, _rgba(st["color"], st["alpha"]), self.lw(st["lw"]), "butt" if dashes else cap))
+
+    def _dashed(self, runs, dashes, lw) -> list[np.ndarray]:
+        """The runs cut to an on-off pattern (in line widths)."""
+        return [d for r in runs for d in _dashes(r, [self.pt(v * lw) for v in dashes])]
 
     def bar(self, x, height, width: float = 0.8, bottom=0, color=None, alpha=None, edgecolor=None, lw: float = 0,
             label=None, align: str = "center", **kwargs) -> Artist:
@@ -1036,14 +1002,10 @@ class Plot(VGroup):
         for k, (l, w, b, h) in enumerate(zip(d["left"], d["width"], d["bottom"], d["height"])):
             corners = self._to_frame([l, l + w, l + w, l], [b, b, b + h, b + h])
             poly = _clip_polygon(corners, self.clip)
-            if len(poly) < 3:
-                continue
-            face = _rgba(colors[k % len(colors)], st["alpha"])
-            edge = _rgba(st["edge"] or colors[k % len(colors)])
-            m = VMobject(fill_color=face, fill_opacity=face.alpha, stroke_color=edge,
-                         stroke_width=self.lw(st["lw"]), joint_type="miter")
-            m.fill_color.alpha = 1
-            a.add(m.set_points(_corners(poly, closed=True)))
+            if len(poly) >= 3:
+                color = colors[k % len(colors)]
+                face, edge = _rgba(color, st["alpha"]), _rgba(st["edge"] or color)
+                a.add(_fill_mob([poly], face, edge, self.lw(st["lw"]), "miter"))
 
     def hist(self, values, bins=10, range=None, density: bool = False, histtype: str = "bar", **kwargs) -> Artist:
         counts, edges = np.histogram(np.asarray(values, dtype=float), bins=bins, range=range, density=density)
@@ -1063,12 +1025,13 @@ class Plot(VGroup):
         lw = elinewidth or kwargs.get("lw", self.rc["lines.linewidth"])
         style = dict(color=ecolor or color, lw=lw, cap=capsize, alpha=kwargs.get("alpha"), ls="-")
 
-        def spread(err, n):
+        def spread(err):
+            """(below, above) per point: from a number, one per point, or (2, n)."""
             if err is None:
                 return None
             err = np.asarray(err, dtype=float)
-            return (err, err) if err.ndim <= 1 else (err[0], err[1])
-        data = {"x": x, "y": y, "yerr": spread(yerr, len(x)), "xerr": spread(xerr, len(x))}
+            return tuple(err if err.ndim == 2 else np.broadcast_to(err, (2,) + x.shape))
+        data = {"x": x, "y": y, "yerr": spread(yerr), "xerr": spread(xerr)}
         ey = [y] + ([y - data["yerr"][0], y + data["yerr"][1]] if yerr is not None else [])
         ex = [x] + ([x - data["xerr"][0], x + data["xerr"][1]] if xerr is not None else [])
         data.update(ex=np.concatenate(ex), ey=np.concatenate(ey))
@@ -1078,27 +1041,29 @@ class Plot(VGroup):
 
     def _draw_errorbars(self, a: Artist):
         st, d = a.style, a.data
-        segments = []
+        x, y = d["x"], d["y"]
+        segments = []  # (k, 2, 2): per point its bar, then the caps at its ends
         cap = self.pt(st["cap"]) / 2
         for err, dim in ((d["yerr"], 1), (d["xerr"], 0)):
             if err is None:
                 continue
-            for xi, yi, lo, hi in zip(d["x"], d["y"], err[0], err[1]):
-                if dim == 1:
-                    a_, b_ = self._to_frame([xi, xi], [yi - lo, yi + hi])
-                else:
-                    a_, b_ = self._to_frame([xi - lo, xi + hi], [yi, yi])
-                segments.append(np.array([a_, b_]))
-                if cap:
-                    across = np.array([cap, 0]) if dim == 1 else np.array([0, cap])
-                    for end in (a_, b_):
-                        segments.append(np.array([end - across, end + across]))
-        runs = [r for seg in segments for r in _clip_polyline(seg, self.clip)]
-        if runs:
-            color = _rgba(st["color"], st["alpha"])
-            m = VMobject(stroke_color=color, stroke_width=self.lw(st["lw"]), stroke_opacity=color.alpha)
-            m.stroke_color.alpha = 1
-            a.add(m.set_points(np.concatenate([_corners(r) for r in runs])))
+            lo, hi = err
+            if dim == 1:
+                ends = np.stack([self._to_frame(x, y - lo), self._to_frame(x, y + hi)], 1)
+            else:
+                ends = np.stack([self._to_frame(x - lo, y), self._to_frame(x + hi, y)], 1)
+            parts = ends[:, None]
+            if cap:
+                across = np.array([cap, 0]) if dim == 1 else np.array([0, cap])
+                parts = np.concatenate([parts, np.stack([ends - across, ends + across], 2)], 1)
+            segments.append(parts.reshape(-1, 2, 2))
+        if segments:
+            # one polyline, broken by NaN between the segments
+            segments = np.concatenate(segments)
+            pts = np.concatenate([segments, np.full((len(segments), 1, 2), np.nan)], 1).reshape(-1, 2)
+            runs = _clip_polyline(pts, self.clip)
+            if runs:
+                a.add(_stroke_mob(runs, _rgba(st["color"], st["alpha"]), self.lw(st["lw"]), join="miter"))
 
     def imshow(self, Z, extent=None, origin: str = "upper", cmap="viridis", vmin=None, vmax=None, alpha=None,
                **kwargs) -> Artist:
@@ -1115,15 +1080,15 @@ class Plot(VGroup):
         _unused(kwargs, "imshow", style)
         data = {"Z": Z, "extent": extent, "ex": [l, r], "ey": [b, t], "sticky_x": [l, r], "sticky_y": [b, t],
                 "inverted": (r < l, t < b)}
+        if Z.ndim == 2:
+            data["range"] = _range(Z.astype(float), vmin, vmax)
         return self._add(Artist(self, "image", data, style, None))
 
     def _draw_image(self, a: Artist):
         st, d = a.style, a.data
         Z = d["Z"]
         if Z.ndim == 2:
-            norm, lo, hi = self._norm(Z.astype(float), st["vmin"], st["vmax"])
-            st["range"] = (lo, hi)
-            rgba = colormap(st["cmap"])(np.clip(norm, 0, 1))
+            rgba = colormap(st["cmap"])(_norm(Z.astype(float), *d["range"]))
         else:
             rgba = Z.astype(float) / (255 if Z.dtype == np.uint8 else 1)
             if rgba.shape[2] == 3:
@@ -1178,7 +1143,8 @@ class Plot(VGroup):
         else:
             parts = [generator.lines(level) for level in levels]
         data = {"levels": levels, "parts": parts, "ex": [X.min(), X.max()], "ey": [Y.min(), Y.max()],
-                "sticky_x": [X.min(), X.max()], "sticky_y": [Y.min(), Y.max()]}
+                "sticky_x": [X.min(), X.max()], "sticky_y": [Y.min(), Y.max()],
+                "range": (levels[0] if vmin is None else vmin, levels[-1] if vmax is None else vmax)}
         return self._add(Artist(self, "contours", data, style, None))
 
     def _draw_contours(self, a: Artist):
@@ -1189,34 +1155,24 @@ class Plot(VGroup):
             colors = st["colors"] if isinstance(st["colors"], (list, tuple)) else [st["colors"]]
             colors = [Color(colors[k % len(colors)]) for k in range(len(values))]
         else:
-            norm, lo, hi = self._norm(values, st["vmin"], st["vmax"])
-            st["range"] = (lo, hi)
-            colors = [Color(c) for c in colormap(st["cmap"])(np.clip(norm, 0, 1))]
+            colors = [Color(c) for c in colormap(st["cmap"])(_norm(values, *_range(values, st["vmin"], st["vmax"])))]
         for color, part in zip(colors, d["parts"]):
             color = _rgba(color, st["alpha"])
-            curves = []
             if st["filled"]:
-                points, offsets = part[0], part[1]
-                for pts, offs in zip(points, offsets):
+                polys = []
+                for pts, offs in zip(part[0], part[1]):
                     for i0, i1 in zip(offs[:-1], offs[1:]):
                         ring = simplify(self._to_frame(pts[i0:i1, 0], pts[i0:i1, 1]), self.pt(SIMPLIFY))
                         poly = _clip_polygon(ring, self.clip)
                         if len(poly) >= 3:
-                            curves.append(_corners(poly, closed=True))
-                if curves:
-                    m = VMobject(fill_color=color, fill_opacity=color.alpha, stroke_width=0)
-                    m.fill_color.alpha = 1
-                    a.add(m.set_points(np.concatenate(curves)))
+                            polys.append(poly)
+                if polys:
+                    a.add(_fill_mob(polys, color))
             else:
-                for line in part:
-                    runs = [simplify(r, self.pt(SIMPLIFY))
-                            for r in _clip_polyline(self._to_frame(line[:, 0], line[:, 1]), self.clip)]
-                    curves.extend(_corners(r) for r in runs)
-                if curves:
-                    m = VMobject(stroke_color=color, stroke_width=self.lw(st["lw"]), stroke_opacity=color.alpha,
-                                 joint_type="round")
-                    m.stroke_color.alpha = 1
-                    a.add(m.set_points(np.concatenate(curves)))
+                runs = [simplify(r, self.pt(SIMPLIFY)) for line in part
+                        for r in _clip_polyline(self._to_frame(line[:, 0], line[:, 1]), self.clip)]
+                if runs:
+                    a.add(_stroke_mob(runs, color, self.lw(st["lw"])))
 
     def text(self, x, y, s: str, size: float | None = None, color=None, ha: str = "center", va: str = "center",
              transform: str = "data", zorder=None) -> Artist:
@@ -1305,12 +1261,14 @@ class Plot(VGroup):
         s = e.style
         if e.kind in ("line", "axline"):
             group = VGroup()
-            if s.get("ls") not in ("", "None", "none"):
-                group.add(VMobject(stroke_color=_rgba(s["color"]), stroke_width=self.lw(s["lw"]),
-                                   joint_type="round").set_points_as_corners([[0, 0, 0], [width, 0, 0]]))
+            dashes = _DASHES.get(s["ls"]) if isinstance(s["ls"], str) else s["ls"]
+            if dashes != "none":
+                pts = np.array([[0.0, 0.0], [width, 0.0]])
+                runs = self._dashed([pts], dashes, s["lw"]) if dashes else [pts]
+                group.add(_stroke_mob(runs, _rgba(s["color"]), self.lw(s["lw"])))
             if s.get("marker"):
                 face = s["mfc"] if s.get("mfc") is not None else s["color"]
-                group.add(*self._markers(np.array([[width / 2, 0]]), s["marker"], s["ms"], [face], s["mec"], s["mew"],
+                group.add(*self._markers(np.array([[width / 2, 0]]), s["marker"], s["ms"], face, s["mec"], s["mew"],
                                          s.get("alpha")))
             if not group.submobjects:
                 group.add(VMobject().set_points([[0, 0, 0]] * 4))
@@ -1318,7 +1276,7 @@ class Plot(VGroup):
         if e.kind == "scatter":
             face = s["c"] if s["values"] is None else colormap(s["cmap"])(0.6)
             size = min(math.sqrt(np.max(s["s"])), 10)
-            return VGroup(*self._markers(np.array([[width / 2, 0]]), s["marker"], size, [face], s["edge"], s["lw"],
+            return VGroup(*self._markers(np.array([[width / 2, 0]]), s["marker"], size, face, s["edge"], s["lw"],
                                          s["alpha"]))
         color = s.get("color", self.fg)
         color = color[0] if isinstance(color, (list, tuple)) and not isinstance(color[0], float) else color
@@ -1340,24 +1298,10 @@ class Plot(VGroup):
         self._dirty = True
         return self._add(artist)
 
-    def _mappable_range(self, m: Artist):
-        st, d = m.style, m.data
-        if m.kind == "contours":
-            levels = d["levels"]
-            return (st["vmin"] if st["vmin"] is not None else levels[0],
-                    st["vmax"] if st["vmax"] is not None else levels[-1])
-        values = st.get("values") if m.kind == "scatter" else d.get("Z")
-        if values is None or np.asarray(values).ndim > 2:
-            return 0.0, 1.0
-        values = np.asarray(values, dtype=float)
-        lo = np.nanmin(values) if st.get("vmin") is None else st["vmin"]
-        hi = np.nanmax(values) if st.get("vmax") is None else st["vmax"]
-        return float(lo), float(hi)
-
     def _colorbar_parts(self) -> float:
         """Typeset the colorbar's labels; returns the room it needs right of the box."""
         st = self._colorbar.style
-        lo, hi = self._mappable_range(st["mappable"])
+        lo, hi = st["mappable"].data.get("range", (0.0, 1.0))
         if st["ticks"] is not None:
             ticks = np.asarray(st["ticks"], dtype=float)
         else:
@@ -1368,8 +1312,7 @@ class Plot(VGroup):
         if fmt is None:
             names = tick_labels(ticks)[0]
         else:
-            names = [fmt(v) if callable(fmt) else fmt % v for v in ticks]
-            names = ["−" + n[1:] if n.startswith("-") else n for n in names]
+            names = [_minus(fmt(v) if callable(fmt) else fmt % v) for v in ticks]
         from .text import texts
         labels = texts(names, size=self.tick_fontsize, color=self.fg, font=self.font)
         title = self._text(st["label"]).rotate(-PI / 2) if st["label"] else None

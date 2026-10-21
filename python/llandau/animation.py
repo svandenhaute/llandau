@@ -9,6 +9,7 @@ animations written for manim.
 from __future__ import annotations
 
 import math
+import sys
 
 import numpy as np
 
@@ -172,17 +173,7 @@ def ease_out_bounce(t):
     return n1 * t * t + 0.984375
 
 
-class _RateFunctions:
-    """manim.rate_functions as a namespace."""
-
-    def __getattr__(self, name):
-        try:
-            return globals()[name]
-        except KeyError:
-            raise AttributeError(name) from None
-
-
-rate_functions = _RateFunctions()
+rate_functions = sys.modules[__name__]  # manim.rate_functions as a namespace
 
 
 # --- timing ------------------------------------------------------------------------------
@@ -231,8 +222,7 @@ class Animation:
     introducer = False
 
     def __init__(self, mobject: Mobject | None = None, run_time: float = 1.0, rate_func=smooth, lag_ratio: float = 0.0,
-                 reverse_rate_function: bool = False, remover: bool = False, introducer: bool | None = None,
-                 suspend_mobject_updating: bool = True, name: str | None = None, **kwargs):
+                 reverse_rate_function: bool = False, remover: bool = False, introducer: bool | None = None, **kwargs):
         self.mobject = mobject if mobject is not None else Mobject()
         self.run_time = run_time
         self.rate_func = rate_func
@@ -241,8 +231,6 @@ class Animation:
         self.remover = remover
         if introducer is not None:
             self.introducer = introducer
-        self.suspend_mobject_updating = suspend_mobject_updating
-        self.name = name
         self.starting_mobject = None
 
     def __repr__(self):
@@ -297,15 +285,13 @@ class Animation:
         return self.run_time
 
     def set_run_time(self, run_time: float):
-        self.run_time = run_time
-        return self
-
-    def set_rate_func(self, rate_func):
-        self.rate_func = rate_func
-        return self
+        self.run_time = run_time; return self  # noqa: E702
 
     def get_rate_func(self):
         return self.rate_func
+
+    def set_rate_func(self, rate_func):
+        self.rate_func = rate_func; return self  # noqa: E702
 
     # --- compiling ------------------------------------------------------------------------
 
@@ -357,19 +343,7 @@ class AnimationGroup(Animation):
         for a in self.animations:
             a._setup_scene(scene)
 
-    def begin(self):
-        for a in self.animations:
-            a.begin()
-
-    def interpolate(self, alpha: float):
-        time = self.rate_func(alpha) * self.max_end_time
-        for a, start, end in self.timings:
-            run = end - start
-            a.interpolate(min(max((time - start) / run, 0), 1) if run else float(time >= end))
-
-    def finish(self):
-        for a in self.animations:
-            a.finish()
+    # no begin/interpolate/finish: Scene.play flattens groups and bakes only the leaves
 
     def clean_up_from_scene(self, scene):
         for a in self.animations:
@@ -377,12 +351,8 @@ class AnimationGroup(Animation):
 
     def children(self, clock: Clock):
         """Each animation with its clock."""
-        out = []
-        for a, start, end in self.timings:
-            m = self.max_end_time or 1.0
-            out.append((a, clock.sub(start / m, end / m, self.rate_func) if self.rate_func is not linear
-                        else clock.sub(start / m, end / m)))
-        return out
+        m = self.max_end_time or 1.0
+        return [(a, clock.sub(start / m, end / m, self.rate_func)) for a, start, end in self.timings]
 
 
 class LaggedStart(AnimationGroup):
@@ -421,12 +391,19 @@ class Transform(Animation):
         self.replace_mobject_with_target_in_scene = replace_mobject_with_target_in_scene
         super().__init__(mobject, **kwargs)
 
+    # start_state() and create_target(): the states the animation runs between, to be
+    # aligned and used up (the mobject itself when it may be aligned in place)
+
+    def start_state(self):
+        return self.mobject.copy()
+
     def create_target(self):
-        return self.target_mobject
+        return self.target_mobject.copy()
 
     def begin(self):
-        self.target_mobject = self.create_target()
-        self.target_copy = self.target_mobject.copy()
+        end = self.create_target()
+        self.target_copy = end.copy() if end is self.mobject else end
+        _become_keeping_parts(self.mobject, self.start_state())
         _align_families(self.mobject, self.target_copy)
         super().begin()
 
@@ -444,17 +421,15 @@ class Transform(Animation):
     def compile(self, ctx, clock):
         if self.path_arc:
             return False
-        self.target_mobject = self.create_target()
-        self.target_copy = self.target_mobject.copy()
-        start = self.mobject.copy()
-        _align_families(start, self.target_copy)
-        pairs = list(zip(start.family_members_with_points(), self.target_copy.family_members_with_points()))
+        start, end = self.start_state(), self.create_target()
+        _align_families(start, end)
+        pairs = list(zip(start.family_members_with_points(), end.family_members_with_points()))
         clocks = self._lag_clocks(clock, len(pairs))
         z = ctx.z_of(self.mobject)
         ctx.claim(self.mobject)
         for i, ((a, b), c) in enumerate(zip(pairs, clocks)):
             ctx.morph(a, b, z(i, len(pairs)), c, self.rate_func, self.reverse_rate_function)
-        self._aligned_start = start
+        self._aligned_start, self.target_copy = start, end
         return True
 
     def finish_native(self, scene):
@@ -489,12 +464,12 @@ class TransformFromCopy(Transform):
 
 class ClockwiseTransform(Transform):
     def __init__(self, mobject, target_mobject, path_arc: float = -PI, **kwargs):
-        super().__init__(mobject, target_mobject, path_arc=path_arc, **kwargs)
+        super().__init__(mobject, target_mobject, path_arc, **kwargs)
 
 
 class CounterclockwiseTransform(Transform):
     def __init__(self, mobject, target_mobject, path_arc: float = PI, **kwargs):
-        super().__init__(mobject, target_mobject, path_arc=path_arc, **kwargs)
+        super().__init__(mobject, target_mobject, path_arc, **kwargs)
 
 
 class MoveToTarget(Transform):
@@ -564,92 +539,61 @@ class _FromStart(Transform):
     """Animations that bring a mobject in from a start state (an introducer) or
     take it out to an end state (a remover)."""
 
-    def __init__(self, mobject, **kwargs):
-        super().__init__(mobject, **kwargs)
-
-    def start_state(self):
-        return self.mobject.copy()
-
     def end_state(self):
         return self.mobject.copy()
-
-    def begin(self):
-        # mobject goes from start_state to end_state
-        target = self.end_state()
-        start = self.start_state()
-        self.target_mobject = target
-        self.mobject.become(start)
-        self.target_copy = target.copy()
-        _align_families(self.mobject, self.target_copy)
-        self.starting_mobject = self.mobject.copy()
-        self.interpolate(0)
 
     def create_target(self):
         return self.end_state()
 
-    def compile(self, ctx, clock):
-        if self.path_arc:
-            return False
-        start, end = self.start_state(), self.end_state()
-        _align_families(start, end)
-        pairs = list(zip(start.family_members_with_points(), end.family_members_with_points()))
-        clocks = self._lag_clocks(clock, len(pairs))
-        z = ctx.z_of(self.mobject)
-        ctx.claim(self.mobject)
-        for i, ((a, b), c) in enumerate(zip(pairs, clocks)):
-            ctx.morph(a, b, z(i, len(pairs)), c, self.rate_func, self.reverse_rate_function)
-        self._final = end
-        return True
-
     def finish_native(self, scene):
         if not self.remover:
-            _become_keeping_parts(self.mobject, self._final)
+            super().finish_native(scene)
 
 
-class FadeIn(_FromStart):
-    introducer = True
-
+class _Fade(_FromStart):
     def __init__(self, *mobjects, shift=None, target_position=None, scale: float = 1, **kwargs):
+        self._mobjects = mobjects
         mobject = mobjects[0] if len(mobjects) == 1 else Group(*mobjects)
-        self.shift_vector = _fade_shift(mobject, shift, target_position)
-        self.scale_factor = scale
+        if shift is not None:
+            self.shift_vector = np.asarray(shift, dtype=float)
+        elif target_position is not None:
+            if isinstance(target_position, Mobject):
+                target_position = target_position.get_center()
+            self.shift_vector = np.asarray(target_position, dtype=float) - mobject.get_center()
+        else:
+            self.shift_vector = np.zeros(3)
         self._point_target = target_position is not None
+        self.scale_factor = scale
         super().__init__(mobject, **kwargs)
+
+
+class FadeIn(_Fade):
+    introducer = True
 
     def start_state(self):
         start = self.mobject.copy().fade(1)
         start.shift(-self.shift_vector if not self._point_target else self.shift_vector)
         return start.scale(self.scale_factor)
 
+    def end_state(self):
+        return self.mobject  # fades in to what it is
+
     def _setup_scene(self, scene):
-        # FadeIn(a, b) adds each of them
-        for m in (self.mobject.submobjects if type(self.mobject) is Group else [self.mobject]):
-            scene.add(m)
+        scene.add(*self._mobjects)
 
 
-class FadeOut(_FromStart):
-    def __init__(self, *mobjects, shift=None, target_position=None, scale: float = 1, **kwargs):
-        mobject = mobjects[0] if len(mobjects) == 1 else Group(*mobjects)
-        self.shift_vector = _fade_shift(mobject, shift, target_position)
-        self.scale_factor = scale
-        self._mobjects = mobjects
-        super().__init__(mobject, remover=True, **kwargs)
+class FadeOut(_Fade):
+    def __init__(self, *mobjects, **kwargs):
+        super().__init__(*mobjects, remover=True, **kwargs)
+
+    def start_state(self):
+        return self.mobject  # fades out from what it is
 
     def end_state(self):
         return self.mobject.copy().fade(1).shift(self.shift_vector).scale(self.scale_factor)
 
     def clean_up_from_scene(self, scene):
         scene.remove(*self._mobjects)
-
-
-def _fade_shift(mobject, shift, target_position):
-    if shift is not None:
-        return np.asarray(shift, dtype=float)
-    if target_position is not None:
-        if isinstance(target_position, Mobject):
-            target_position = target_position.get_center()
-        return np.asarray(target_position, dtype=float) - mobject.get_center()
-    return np.zeros(3)
 
 
 class GrowFromPoint(_FromStart):
@@ -669,22 +613,22 @@ class GrowFromPoint(_FromStart):
 
 class GrowFromCenter(GrowFromPoint):
     def __init__(self, mobject, point_color=None, **kwargs):
-        super().__init__(mobject, mobject.get_center(), point_color=point_color, **kwargs)
+        super().__init__(mobject, mobject.get_center(), point_color, **kwargs)
 
 
 class GrowFromEdge(GrowFromPoint):
     def __init__(self, mobject, edge, point_color=None, **kwargs):
-        super().__init__(mobject, mobject.get_critical_point(edge), point_color=point_color, **kwargs)
+        super().__init__(mobject, mobject.get_critical_point(edge), point_color, **kwargs)
 
 
 class GrowArrow(GrowFromPoint):
     def __init__(self, arrow, point_color=None, **kwargs):
-        super().__init__(arrow, arrow.get_start(), point_color=point_color, **kwargs)
+        super().__init__(arrow, arrow.get_start(), point_color, **kwargs)
 
 
 class SpinInFromNothing(GrowFromCenter):
     def __init__(self, mobject, angle: float = PI / 2, point_color=None, **kwargs):
-        super().__init__(mobject, point_color=point_color, path_arc=angle, **kwargs)
+        super().__init__(mobject, point_color, path_arc=angle, **kwargs)
 
 
 class FadeTransform(AnimationGroup):
@@ -701,8 +645,7 @@ class FadeTransform(AnimationGroup):
         super().__init__(fade_out, fade_in, **kwargs)
 
 
-class FadeTransformPieces(FadeTransform):
-    pass
+class FadeTransformPieces(FadeTransform): pass  # noqa: E701
 
 
 class _FadeInFrom(_FromStart):
@@ -713,7 +656,7 @@ class _FadeInFrom(_FromStart):
         super().__init__(mobject, **kwargs)
 
     def start_state(self):
-        return self._start.copy()
+        return self._start
 
 
 class TransformMatchingShapes(AnimationGroup):
@@ -790,6 +733,7 @@ class Uncreate(Create):
 
 class DrawBorderThenFill(Animation):
     introducer = True
+    reverse = False  # Write: the last part first (manim inverts the submobjects)
 
     def __init__(self, vmobject, run_time: float = 2, rate_func=double_smooth, stroke_width: float = 2,
                  stroke_color=None, **kwargs):
@@ -815,11 +759,16 @@ class DrawBorderThenFill(Animation):
         else:
             submobject.interpolate(outline, starting, 2 * alpha - 1)
 
+    def get_sub_alpha(self, alpha, index, num_submobjects):
+        if self.reverse:
+            index = num_submobjects - 1 - index
+        return super().get_sub_alpha(alpha, index, num_submobjects)
+
     def compile(self, ctx, clock):
         # the renderer's outline is manim's default one
         if self.stroke_width != 2 or self.stroke_color is not None:
             return False
-        return _compile_leaves(self, ctx, clock, "write")
+        return _compile_leaves(self, ctx, clock, "write", order=-1 if self.reverse else 1)
 
     def finish_native(self, scene):
         pass
@@ -838,18 +787,10 @@ class Write(DrawBorderThenFill):
         super().__init__(vmobject, rate_func=rate_func, run_time=run_time, lag_ratio=lag_ratio,
                          introducer=not reverse, **kwargs)
 
-    def compile(self, ctx, clock):
-        if self.reverse:
-            return False
-        return super().compile(ctx, clock)
-
 
 class Unwrite(Write):
     def __init__(self, vmobject, rate_func=linear, reverse: bool = True, **kwargs):
         super().__init__(vmobject, rate_func=rate_func, reverse=reverse, reverse_rate_function=True, **kwargs)
-
-    def compile(self, ctx, clock):
-        return _compile_leaves(self, ctx, clock, "write", order=-1 if self.reverse else 1)
 
 
 def _compile_leaves(anim, ctx, clock, kind, order: int = 1):
@@ -881,12 +822,10 @@ class ShowPassingFlash(ShowPartial):
 class ShowIncreasingSubsets(Animation):
     introducer = True
 
-    def __init__(self, group, suspend_mobject_updating: bool = False, int_func=np.floor,
-                 reverse_rate_function: bool = False, **kwargs):
+    def __init__(self, group, int_func=np.floor, **kwargs):
         self.all_submobs = list(group.submobjects)
         self.int_func = int_func
-        super().__init__(group, suspend_mobject_updating=suspend_mobject_updating,
-                         reverse_rate_function=reverse_rate_function, **kwargs)
+        super().__init__(group, **kwargs)
 
     def interpolate_mobject(self, alpha):
         n = len(self.all_submobs)
@@ -895,8 +834,6 @@ class ShowIncreasingSubsets(Animation):
 
     def finish_native(self, scene):
         self.mobject.submobjects = self.all_submobs
-        if self.remover:
-            self.mobject.submobjects = self.all_submobs
 
     def compile(self, ctx, clock):
         if not clock.affine:
@@ -1014,18 +951,18 @@ Rotating = Rotate
 
 
 class MoveAlongPath(Animation):
-    def __init__(self, mobject, path, suspend_mobject_updating: bool = False, **kwargs):
+    def __init__(self, mobject, path, **kwargs):
         self.path = path
-        super().__init__(mobject, suspend_mobject_updating=suspend_mobject_updating, **kwargs)
+        super().__init__(mobject, **kwargs)
 
     def interpolate_mobject(self, alpha):
         self.mobject.move_to(self.path.point_from_proportion(self.rate_func(alpha)))
 
 
 class UpdateFromFunc(Animation):
-    def __init__(self, mobject, update_function, suspend_mobject_updating: bool = False, **kwargs):
+    def __init__(self, mobject, update_function, **kwargs):
         self.update_function = update_function
-        super().__init__(mobject, suspend_mobject_updating=suspend_mobject_updating, **kwargs)
+        super().__init__(mobject, **kwargs)
 
     def interpolate_mobject(self, alpha):
         self.update_function(self.mobject)
@@ -1059,9 +996,7 @@ class _AnimationBuilder:
         self.anim_args.update(anim_args)
         return self
 
-    def set_anim_args(self, **anim_args):
-        self.anim_args.update(anim_args)
-        return self
+    set_anim_args = __call__
 
     def build(self):
         return _MethodAnimation(self.mobject, self.methods, **self.anim_args)
@@ -1181,15 +1116,15 @@ def _interpolate(m, a, b, alpha, path_arc: float = 0, axis=OUT):
 
 
 def _become_keeping_parts(mobject: Mobject, state: Mobject):
-    """mobject takes state's points and styles; its parts stay the same
-    objects when the structure matches."""
+    """mobject takes state's points and styles (state is used up); its parts
+    stay the same objects when the structure matches."""
     mine, theirs = mobject.get_family(), state.get_family()
     if len(mine) == len(theirs) and all(type(x) is type(y) for x, y in zip(mine, theirs)):
         for x, y in zip(mine, theirs):
             subs = x.submobjects
             for key, value in y.__dict__.items():
                 if key != "submobjects":
-                    setattr(x, key, value.copy() if isinstance(value, np.ndarray) else value)
+                    setattr(x, key, value)
             x.submobjects = subs
     else:
         mobject.become(state)

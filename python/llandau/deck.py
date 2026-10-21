@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from .animation import AddTextLetterByLetter, Write, LaggedStart
 from .mobject import Group, DR, ImageMobject, config
-from .scene import Scene
+from .scene import MIN_STEP, Scene
 
 from .theme import DARK, LABEL, use
 from .layout import R, Region, place
@@ -38,7 +38,6 @@ class Deck(Scene):
     def setup(self):
         super().setup()
         use(self.theme)
-        self.wait_time_between_slides = 0.05
         self.camera.background_color = self.theme.bg
         if self.numbered and self.number is not None:
             self.add(text(str(self.number), size=LABEL).to_corner(DR, buff=0.3))
@@ -46,7 +45,7 @@ class Deck(Scene):
     def step(self, notes: str = ""):
         """End the current slide step. The short wait guarantees the step isn't empty.
         notes belong to the step that starts here (manim-slides attaches them to the next step)."""
-        self.wait(0.05)
+        self.wait(MIN_STEP)
         self.next_slide(notes=notes)
 
     def reveal(self, *mobs, anim=None, run_time: float | None = None, lag: float = 0,

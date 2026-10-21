@@ -32,6 +32,11 @@ TYPST_SCALE = 1 / 72
 _MATH = re.compile(r"(?<!\\)\$")
 
 
+def _minus(s: str) -> str:
+    """A number's leading hyphen as a minus sign."""
+    return "−" + s[1:] if s.startswith("-") else s
+
+
 def text(s: str, size: float = BODY, color=None, weight=NORMAL, slant=NORMAL,
          typst_markup: bool | None = None, font: str | None = None, **kwargs):
     """Single text object, typeset with Typst. Contains unescaped $...$ -> the string is Typst
@@ -66,7 +71,7 @@ def typst(src: str, size: float = BODY, color=None, weight=NORMAL, slant=NORMAL,
     """Arbitrary Typst markup as a vector mobject, in the deck font and colour.
     Colours set inside the markup are kept; kwargs go to SVGMobject."""
     doc = _document(src, size, color, weight, slant, font)
-    return SVGMobject(str(_compile(doc)), height=None, **kwargs).scale(TYPST_SCALE)
+    return SVGMobject(str(_compile_pages(doc, 1)[0]), height=None, **kwargs).scale(TYPST_SCALE)
 
 
 def texts(strings, size: float = BODY, color=None, weight=NORMAL, slant=NORMAL, font: str | None = None,
@@ -110,28 +115,18 @@ def _math_fonts() -> list[str]:
     return [f for f in MATH_FONTS if f.lower() in available] or [MATH_FONTS[-1]]
 
 
-def _compile(doc: str) -> Path:
-    out = CACHE_DIR / "typst" / f"{hashlib.sha1(doc.encode()).hexdigest()[:16]}.svg"
-    if not out.exists():
-        out.parent.mkdir(parents=True, exist_ok=True)
-        tmp = out.with_suffix(".tmp.svg")
-        result = subprocess.run(["typst", "compile", "-", str(tmp)], input=doc, text=True, capture_output=True)
-        if result.returncode != 0:
-            raise ValueError(f"typst failed on:\n{doc}\n\n{result.stderr}")
-        tmp.replace(out)
-    return out
-
-
 def _compile_pages(doc: str, pages: int) -> list[Path]:
-    """One SVG per page of a document."""
+    """One SVG per page of a document (cached by its text)."""
     folder = CACHE_DIR / "typst" / hashlib.sha1(doc.encode()).hexdigest()[:16]
     paths = [folder / f"{k}.svg" for k in range(1, pages + 1)]
     if not all(p.exists() for p in paths):
         folder.mkdir(parents=True, exist_ok=True)
-        result = subprocess.run(["typst", "compile", "-", str(folder / "{p}.svg")], input=doc, text=True,
+        result = subprocess.run(["typst", "compile", "-", str(folder / "{p}.tmp.svg")], input=doc, text=True,
                                 capture_output=True)
         if result.returncode != 0:
             raise ValueError(f"typst failed on:\n{doc}\n\n{result.stderr}")
+        for p in paths:
+            p.with_suffix(".tmp.svg").replace(p)  # atomic: a crashed run never leaves half a page
     return paths
 
 

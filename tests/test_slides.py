@@ -3,7 +3,7 @@ import pytest
 
 from llandau import (
     BLACK, BLUE, UP, Create, Deck, Dot, FadeIn, FadeOut, LaggedStart, LIGHT, R, Rectangle, Scene, Square, Transform,
-    VGroup, Write, build, place, text,
+    Unwrite, VGroup, Write, build, place, text,
 )
 from llandau.mobject import smooth_handles
 
@@ -63,6 +63,50 @@ def test_lagged_writes_overlap():
 
     deck = build([Lagged])
     assert deck.duration == pytest.approx(4.0)
+
+
+def test_unwrite_honors_a_custom_outline():
+    # the native write clip draws manim's default outline (width 2, the stroke color):
+    # any other outline is baked, and drawn
+    def unwrite(**kwargs):
+        class Unwriting(Scene):
+            def setup(self):
+                self.camera.background_color = "#FFFFFF"  # the deck's: no backdrop clip
+
+            def construct(self):
+                square = Square(color=BLACK, fill_opacity=1, stroke_width=0)
+                self.add(square)
+                self.play(Unwrite(square, **kwargs))
+
+        deck = build([Unwriting])
+        return deck.num_clips, ink(deck.render(0.75, 320, 180))  # half of the outline is left
+
+    native, thin = unwrite()
+    baked, thick = unwrite(stroke_width=20)
+    assert native == 1 and baked > 10
+    assert 0 < thin and 3 * thin < thick
+
+
+def test_updaters_are_baked():
+    from llandau import ValueTracker, always_redraw
+
+    class Tracking(Scene):
+        def construct(self):
+            self.camera.background_color = "#FFFFFF"
+            x = ValueTracker(-2)
+            dot = always_redraw(lambda: Dot([x.get_value(), 0, 0], radius=0.3, color=BLACK))
+            self.add(dot)
+            self.wait(0.5)  # still: the updater redraws the same dot
+            self.play(x.animate.set_value(2), run_time=1)  # moving: sampled at FPS
+            self.next_slide()
+            self.wait(0.5)
+
+    deck = build([Tracking])
+    assert deck.num_clips > 30
+    assert deck.marks[0][0] == pytest.approx(1.5)
+    left, right = (deck.render(t, 160, 90)[..., :3].min(axis=2) < 200 for t in (0.25, 1.49))
+    assert left[:, :80].sum() > 0 and left[:, 80:].sum() == 0  # the dot is on the left, then on the right
+    assert right[:, 80:].sum() > 0 and right[:, :80].sum() == 0
 
 
 def test_spline_handles_are_manims():
