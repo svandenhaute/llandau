@@ -103,6 +103,21 @@ def test_discrete_states_at_their_own_path_frames(viewer):
     assert not viewer.scrub_discrete
 
 
+def test_discrete_trails(viewer):
+    """Thick trails through the discrete states, a layer of their own, off until asked for."""
+    states = POSITIONS[::2] + np.arange(3)[:, None, None] * 1.0  # three states, 1 A apart
+    viewer.set_discrete_frames(states)
+    assert viewer.state["layers"]["discrete trails"] is False
+    plain = drawn(viewer.render_image(160, 120))
+    viewer.set_discrete_trails(radius=0.1)
+    assert viewer.state["layers"]["discrete trails"] is True
+    assert drawn(viewer.render_image(160, 120)) > plain + 0.005
+    viewer.set_visible("discrete trails", False)
+    assert drawn(viewer.render_image(160, 120)) == pytest.approx(plain, abs=0.002)
+    with pytest.raises(ValueError):
+        viewer.set_discrete_trails(color=[1.0, 0.0])
+
+
 def test_flat_shading(viewer):
     lit = viewer.render_image(160, 120)
     viewer.shading = "flat"

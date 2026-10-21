@@ -8,6 +8,8 @@ pub struct Theme {
     pub bond: Rgba,
     /// trail segments alternate between these two
     pub trail: [Rgba; 2],
+    /// trails through the discrete states
+    pub discrete_trail: Rgba,
     pub vector: Rgba,
     pub tube: Rgba,
     pub clash: Rgba,
@@ -24,6 +26,7 @@ pub const LIGHT: Theme = Theme {
     background: gray(1.0),
     bond: gray(0.12),
     trail: [gray(0.72), gray(0.42)],
+    discrete_trail: [0.85, 0.47, 0.12, 1.0],
     vector: gray(0.05),
     tube: [0.55, 0.62, 0.75, 1.0],
     clash: [0.85, 0.1, 0.75, 1.0], // magenta: not an element color
@@ -35,6 +38,7 @@ pub const DARK: Theme = Theme {
     background: gray(0.0),
     bond: gray(0.75),
     trail: [gray(0.35), gray(0.6)],
+    discrete_trail: [1.0, 0.62, 0.28, 1.0],
     vector: gray(0.95),
     tube: [0.45, 0.55, 0.7, 1.0],
     clash: [1.0, 0.3, 0.9, 1.0],

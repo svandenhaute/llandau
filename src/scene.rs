@@ -224,6 +224,15 @@ pub struct Trails {
     pub window: Option<usize>,
 }
 
+/// Trails through the discrete states (see Structure::discrete), thicker than the path's.
+pub struct DiscreteTrails {
+    pub visible: bool,
+    /// None: the theme's discrete trail color
+    pub color: Option<Rgba>,
+    pub opacity: f32,
+    pub radius: f32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SurfaceColors {
     /// the theme's surface color
@@ -261,6 +270,7 @@ pub struct Scene {
     pub tube_radius: f32,
     pub arrow_radius: f32,
     pub trails: Trails,
+    pub discrete_trails: DiscreteTrails,
     pub vectors: BTreeMap<String, VectorField>,
     pub points: BTreeMap<String, Points>,
     /// per-atom colors: frames * atoms, or atoms (the same every frame)
@@ -302,6 +312,7 @@ impl Default for Scene {
             tube_radius: 0.32,
             arrow_radius: 0.05,
             trails: Trails { visible: true, colors: None, segment_ids: None, opacity: 1.0, radius: 0.02, window: None },
+            discrete_trails: DiscreteTrails { visible: false, color: None, opacity: 1.0, radius: 0.06 },
             vectors: BTreeMap::new(),
             points: BTreeMap::new(),
             colorings: BTreeMap::new(),
@@ -610,6 +621,36 @@ impl Scene {
             radius,
             lines: atoms.len() as u32,
             points_per_line: frames as u32,
+        }
+    }
+
+    /// Trails of the marked atoms through the discrete states, in one color (none
+    /// without states, or while hidden).
+    pub fn discrete_trails(&self) -> TrailGeometry {
+        let d = &self.discrete_trails;
+        let empty = TrailGeometry { points: vec![], colors: vec![], radius: d.radius, lines: 0, points_per_line: 0 };
+        let Some(s) = self.structure.as_ref().filter(|_| d.visible) else {
+            return empty;
+        };
+        let (Some(discrete), states) = (&s.discrete, s.num_discrete_frames()) else {
+            return empty;
+        };
+        if states < 2 {
+            return empty;
+        }
+        let color = d.color.unwrap_or(self.theme.discrete_trail);
+        let color = [color[0], color[1], color[2], color[3] * d.opacity];
+        let atoms = self.trailed_atoms(s);
+        let points = atoms
+            .iter()
+            .flat_map(|&a| (0..states).map(move |state| discrete[state * s.num_atoms + a].to_array()))
+            .collect();
+        TrailGeometry {
+            points,
+            colors: vec![color; states - 1],
+            radius: d.radius,
+            lines: atoms.len() as u32,
+            points_per_line: states as u32,
         }
     }
 }

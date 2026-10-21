@@ -83,6 +83,12 @@ class Viewer(_Viewer):
         frames = None if path_frames is None else [float(f) for f in np.asarray(path_frames).ravel()]
         super().set_discrete_frames(_f32(positions), frames)
 
+    def set_discrete_trails(self, radius=0.06, color=None, opacity=1.0, visible=True):
+        """Trails through the discrete states (see set_discrete_frames), thicker than the path's:
+        radius in angstrom, color (3 or 4 components; None: the theme's), opacity. They are the
+        "discrete trails" layer; visible=False hides them."""
+        super().set_discrete_trails(radius, None if color is None else [float(c) for c in color], opacity, visible)
+
     def add_coloring(self, name, colors):
         super().add_coloring(name, _f32(colors))
 

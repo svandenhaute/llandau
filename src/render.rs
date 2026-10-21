@@ -197,6 +197,16 @@ struct TrailBuffers {
 /// bytes of a trail point
 const POINT_BYTES: u64 = 12;
 
+fn upload_trail_buffers(t: &mut TrailBuffers, device: &wgpu::Device, queue: &wgpu::Queue, trails: &TrailGeometry) {
+    t.points.upload(device, queue, &trails.points);
+    t.colors.upload(device, queue, &trails.colors);
+    t.radius = trails.radius;
+    t.lines = trails.lines;
+    t.points_per_line = trails.points_per_line;
+    // the lines that were uploaded whole, if the points were cut to the GPU's largest buffer
+    t.lines = t.lines.min(t.points.count / t.points_per_line.max(1));
+}
+
 /// A unit mesh for the lathe shader: (position, normal) per vertex.
 struct Mesh {
     buffer: wgpu::Buffer,
@@ -217,6 +227,9 @@ impl Mesh {
 pub struct Renderer {
     globals: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
+    /// the globals again with the discrete trails' radius, bound while they are drawn
+    globals_discrete: wgpu::Buffer,
+    bind_group_discrete: wgpu::BindGroup,
     layout: wgpu::PipelineLayout,
     sphere_shader: wgpu::ShaderModule,
     lathe_shader: wgpu::ShaderModule,
@@ -228,6 +241,7 @@ pub struct Renderer {
     cone: Mesh,
     slots: HashMap<Slot, GpuBuffer>,
     trails: TrailBuffers,
+    discrete_trails: TrailBuffers,
     /// the trail segments drawn (see Scene::trail_segments)
     pub trail_segments: std::ops::Range<u32>,
     pub background: [f32; 4],
@@ -268,6 +282,17 @@ impl Renderer {
             layout: &bind_group_layout,
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: globals.as_entire_binding() }],
         });
+        let globals_discrete = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("globals (discrete trails)"),
+            size: std::mem::size_of::<Globals>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bind_group_discrete = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("globals (discrete trails)"),
+            layout: &bind_group_layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: globals_discrete.as_entire_binding() }],
+        });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("llandau"),
             bind_group_layouts: &[Some(&bind_group_layout)],
@@ -277,6 +302,8 @@ impl Renderer {
         Self {
             globals,
             bind_group,
+            globals_discrete,
+            bind_group_discrete,
             layout,
             sphere_shader: shader(device, "spheres", concat!(include_str!("shaders/common.wgsl"), include_str!("shaders/spheres.wgsl"))),
             lathe_shader: shader(device, "lathe", concat!(include_str!("shaders/common.wgsl"), include_str!("shaders/lathe.wgsl"))),
@@ -288,6 +315,13 @@ impl Renderer {
             cone: Mesh::new(device, "cone", &cone_mesh(24)),
             slots: HashMap::new(),
             trails: TrailBuffers {
+                points: GpuBuffer::new(wgpu::BufferUsages::VERTEX),
+                colors: GpuBuffer::new(wgpu::BufferUsages::VERTEX),
+                radius: 0.0,
+                lines: 0,
+                points_per_line: 0,
+            },
+            discrete_trails: TrailBuffers {
                 points: GpuBuffer::new(wgpu::BufferUsages::VERTEX),
                 colors: GpuBuffer::new(wgpu::BufferUsages::VERTEX),
                 radius: 0.0,
@@ -320,14 +354,11 @@ impl Renderer {
     }
 
     pub fn upload_trails(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, trails: &TrailGeometry) {
-        let t = &mut self.trails;
-        t.points.upload(device, queue, &trails.points);
-        t.colors.upload(device, queue, &trails.colors);
-        t.radius = trails.radius;
-        t.lines = trails.lines;
-        t.points_per_line = trails.points_per_line;
-        // the lines that were uploaded whole, if the points were cut to the GPU's largest buffer
-        t.lines = t.lines.min(t.points.count / t.points_per_line.max(1));
+        upload_trail_buffers(&mut self.trails, device, queue, trails);
+    }
+
+    pub fn upload_discrete_trails(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, trails: &TrailGeometry) {
+        upload_trail_buffers(&mut self.discrete_trails, device, queue, trails);
     }
 
     pub fn upload_ghost(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, spheres: &[SphereInstance], tubes: &[LatheInstance]) {
@@ -395,6 +426,8 @@ impl Renderer {
             cue: [near, far, self.fog, HALO_DEPTH],
         };
         queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
+        let globals_discrete = Globals { viewport: [viewport[2], viewport[3], self.discrete_trails.radius, 0.0], ..globals };
+        queue.write_buffer(&self.globals_discrete, 0, bytemuck::bytes_of(&globals_discrete));
 
         let [r, g, b, a] = self.background.map(f64::from);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
@@ -424,27 +457,37 @@ impl Renderer {
             pass.set_viewport(x, y, width.max(1.0), height.max(1.0), 0.0, 1.0);
             for &(slot, shader, mesh, variant) in &passes {
                 if slot == Slot::Trails {
-                    let t = &self.trails;
-                    let (Some(points), Some(colors), Some(mesh)) = (&t.points.buffer, t.colors.slice(), mesh) else {
-                        continue;
-                    };
-                    let segments = t.points_per_line.saturating_sub(1);
-                    let range = self.trail_segments.start.min(segments)..self.trail_segments.end.min(segments);
-                    if range.is_empty() {
-                        continue;
+                    // the path's trails within the window, then the discrete states' whole,
+                    // with their own radius bound through the second globals
+                    let segments = self.trails.points_per_line.saturating_sub(1);
+                    let windowed = self.trail_segments.start.min(segments)..self.trail_segments.end.min(segments);
+                    let whole = 0..self.discrete_trails.points_per_line.saturating_sub(1);
+                    let sets = [
+                        (&self.trails, &self.bind_group, windowed),
+                        (&self.discrete_trails, &self.bind_group_discrete, whole),
+                    ];
+                    for (t, bind_group, range) in sets {
+                        let (Some(points), Some(colors), Some(mesh)) = (&t.points.buffer, t.colors.slice(), mesh) else {
+                            continue;
+                        };
+                        if range.is_empty() {
+                            continue;
+                        }
+                        // each line is instanced over its segments: start from its points, end from
+                        // the same points one further
+                        pass.set_bind_group(0, bind_group, &[]);
+                        pass.set_pipeline(&self.pipelines[&(format, shader, variant)]);
+                        pass.set_vertex_buffer(0, mesh.buffer.slice(..));
+                        pass.set_vertex_buffer(3, colors);
+                        let bytes_per_line = POINT_BYTES * t.points_per_line as u64;
+                        for line in 0..t.lines as u64 {
+                            let offset = line * bytes_per_line;
+                            pass.set_vertex_buffer(1, points.slice(offset..offset + bytes_per_line));
+                            pass.set_vertex_buffer(2, points.slice(offset + POINT_BYTES..offset + bytes_per_line));
+                            pass.draw(0..mesh.vertices, range.clone());
+                        }
                     }
-                    // each line is instanced over its segments: start from its points, end from
-                    // the same points one further
-                    pass.set_pipeline(&self.pipelines[&(format, shader, variant)]);
-                    pass.set_vertex_buffer(0, mesh.buffer.slice(..));
-                    pass.set_vertex_buffer(3, colors);
-                    let bytes_per_line = POINT_BYTES * t.points_per_line as u64;
-                    for line in 0..t.lines as u64 {
-                        let offset = line * bytes_per_line;
-                        pass.set_vertex_buffer(1, points.slice(offset..offset + bytes_per_line));
-                        pass.set_vertex_buffer(2, points.slice(offset + POINT_BYTES..offset + bytes_per_line));
-                        pass.draw(0..mesh.vertices, range.clone());
-                    }
+                    pass.set_bind_group(0, &self.bind_group, &[]);
                     continue;
                 }
                 let Some(GpuBuffer { buffer: Some(buffer), count: count @ 1.., .. }) = self.slots.get(&slot) else {

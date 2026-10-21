@@ -123,6 +123,7 @@ impl Viewer {
         }
         if self.stale.trails {
             self.renderer.upload_trails(device, queue, &self.scene.trails());
+            self.renderer.upload_discrete_trails(device, queue, &self.scene.discrete_trails());
         }
         if self.stale.ghost {
             let (spheres, tubes) = self.scene.ghost_geometry();
@@ -163,6 +164,9 @@ impl Viewer {
         let mut layers = vec![("atoms".into(), s.show_atoms), ("surface".into(), s.surface.visible)];
         if self.num_path_frames() > 1 {
             layers.push(("trails".into(), s.trails.visible));
+        }
+        if self.num_discrete_frames() > 1 {
+            layers.push(("discrete trails".into(), s.discrete_trails.visible));
         }
         if let Some(ghost) = &s.ghost {
             layers.push(("ghost".into(), ghost.visible));
@@ -389,7 +393,23 @@ impl Viewer {
             self.scene.scrub_discrete = false;
         }
         self.frame = 0;
-        self.changed(FRAME);
+        self.changed(ALL); // the discrete trails too
+        Ok(())
+    }
+
+    /// Trails through the discrete states (see set_discrete_frames), thicker than the
+    /// path's: `radius` in angstrom, `color` (3 or 4 components; None: the theme's) and
+    /// `opacity`. They are the "discrete trails" layer; `visible` false hides them.
+    #[pyo3(signature = (radius = 0.06, color = None, opacity = 1.0, visible = true))]
+    fn set_discrete_trails(&mut self, radius: f32, color: Option<Vec<f32>>, opacity: f32, visible: bool) -> PyResult<()> {
+        let color = match color.as_deref() {
+            None => None,
+            Some([r, g, b]) => Some([*r, *g, *b, 1.0]),
+            Some([r, g, b, a]) => Some([*r, *g, *b, *a]),
+            Some(c) => return Err(value_error(format!("color: expected 3 or 4 components, got {}", c.len()))),
+        };
+        self.scene.discrete_trails = scene::DiscreteTrails { visible, color, opacity, radius };
+        self.changed(ALL);
         Ok(())
     }
 
@@ -671,6 +691,7 @@ impl Viewer {
         match layer {
             "atoms" => s.show_atoms = visible,
             "trails" => s.trails.visible = visible,
+            "discrete trails" => s.discrete_trails.visible = visible,
             "clashes" => s.show_clashes = visible,
             "surface" => s.surface.visible = visible,
             "ghost" => match &mut s.ghost {
