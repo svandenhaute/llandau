@@ -15,6 +15,7 @@
 //! one, else the one the cursor was over last, else the topmost. The mouse over
 //! the panel goes to the panel.
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use pyo3::prelude::*;
@@ -137,7 +138,9 @@ pub struct Lives {
     hovered: Option<usize>,
     /// the window's size at the last mouse event, to place the cursor
     size: (u32, u32),
-    overlay: Option<Overlay>,
+    /// egui over each viewer's picture: one context each, so that a press handled over
+    /// one view is not taken up by the next view's pass (as a drag of its plot)
+    overlays: HashMap<usize, Overlay>,
 }
 
 /// egui over a live view's picture: its plots and the keys.
@@ -384,7 +387,7 @@ impl Lives {
             if plots || help || panel {
                 let x = v.plots.x(v.frame, v.num_frames(), v.scene.scrub_discrete);
                 let dark = v.theme() == "dark";
-                let overlay = self.overlay.get_or_insert_with(|| Overlay::new(gpu));
+                let overlay = self.overlays.entry(live.viewer).or_insert_with(|| Overlay::new(gpu));
                 let rows = help_rows(&v);
                 let keys: Vec<(&str, &str)> = rows.iter().map(|(k, a)| (k.as_str(), a.as_str())).collect();
                 let events = if is_focused { std::mem::take(&mut self.events) } else { Vec::new() };

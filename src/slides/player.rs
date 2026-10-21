@@ -12,6 +12,7 @@ use pyo3::prelude::*;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
+use winit::event_loop::ControlFlow;
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::platform::run_on_demand::EventLoopExtRunOnDemand;
 use winit::window::{Fullscreen, WindowId};
@@ -37,6 +38,16 @@ pub struct Options {
     pub screenshot: Option<String>,
 }
 
+/// Scripted input, for tests: LLANDAU_DRIVE names a file of commands, one per line, run in
+/// order once the window is up: `move X Y` (pixels), `press`, `release`, `rpress`, `rrelease`,
+/// `wheel DY`, `key K` (a character, or right, left, space, home, end, escape), `wait MS`,
+/// `shot PATH` (a PNG of the window now), `quit`.
+struct Driver {
+    commands: Vec<String>,
+    next: usize,
+    due: Instant,
+}
+
 struct App<'a> {
     py: Python<'a>,
     gpu: &'a Gpu,
@@ -55,6 +66,7 @@ struct App<'a> {
     last_scroll: Instant,
     closing: bool,
     error: Option<PyErr>,
+    driver: Option<Driver>,
 }
 
 pub fn play(
@@ -84,6 +96,10 @@ pub fn play(
             last_scroll: Instant::now(),
             closing: false,
             error: None,
+            driver: std::env::var("LLANDAU_DRIVE").ok().and_then(|path| {
+                let text = std::fs::read_to_string(&path).ok()?;
+                Some(Driver { commands: text.lines().map(String::from).collect(), next: 0, due: Instant::now() })
+            }),
         };
         if start == 0 && app.options.screenshot.is_none() {
             app.play_to(app.mark(0));
@@ -208,20 +224,94 @@ impl App<'_> {
         }
     }
 
+    /// A PNG of the window as it is now.
+    fn snapshot(&mut self, path: &str) {
+        if let Err(error) = self.lives.enter(self.py, self.timeline, self.time) {
+            self.error = Some(error);
+        }
+        let Some(target) = self.surface.as_ref() else { return };
+        let size = target.size();
+        let format = target.config.format;
+        self.lives.draw(self.py, self.gpu, self.painter, self.timeline, self.time, size);
+        let offscreen = Offscreen::with_format(&self.gpu.device, size, format);
+        self.painter.draw(&self.gpu.device, &self.gpu.queue, self.timeline, self.images, self.time, offscreen.view(), format, size);
+        let pixels = offscreen.read(self.gpu);
+        if let Err(error) = crate::window::save_png(path, size, format, &pixels) {
+            self.error = Some(crate::runtime_error(error));
+        }
+    }
+
+    /// Run the next scripted command when it is due (see Driver).
+    fn drive(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(driver) = &mut self.driver else { return };
+        if driver.next >= driver.commands.len() || self.surface.is_none() {
+            return;
+        }
+        if Instant::now() < driver.due {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(driver.due));
+            return;
+        }
+        let command = driver.commands[driver.next].clone();
+        driver.next += 1;
+        let words: Vec<&str> = command.split_whitespace().collect();
+        let size = self.size();
+        let number = |i: usize| words.get(i).and_then(|w| w.parse::<f64>().ok()).unwrap_or(0.0);
+        match words.first().copied() {
+            Some("move") => {
+                self.lives.cursor_moved(self.py, self.timeline, self.time, size, (number(1), number(2)));
+            }
+            Some(b @ ("press" | "release" | "rpress" | "rrelease")) => {
+                self.lives.button(self.py, self.timeline, self.time, size, b.ends_with("press"), b.starts_with('r'), false);
+            }
+            Some("wheel") => {
+                let points = number(1);
+                if !self.lives.scroll(self.py, self.timeline, self.time, size, points as f32, false) {
+                    self.scrub(-points);
+                }
+            }
+            Some("key") => {
+                let key = match words.get(1).copied().unwrap_or("") {
+                    "right" => Key::Named(NamedKey::ArrowRight),
+                    "left" => Key::Named(NamedKey::ArrowLeft),
+                    "space" => Key::Named(NamedKey::Space),
+                    "home" => Key::Named(NamedKey::Home),
+                    "end" => Key::Named(NamedKey::End),
+                    "escape" => Key::Named(NamedKey::Escape),
+                    c => Key::Character(c),
+                };
+                self.on_key(event_loop, key);
+            }
+            Some("wait") => {
+                if let Some(driver) = &mut self.driver {
+                    driver.due = Instant::now() + std::time::Duration::from_millis(number(1) as u64);
+                }
+            }
+            Some("shot") => self.snapshot(words.get(1).copied().unwrap_or("shot.png")),
+            Some("quit") => self.closing = true,
+            _ => {}
+        }
+        self.request_redraw();
+        event_loop.set_control_flow(ControlFlow::Poll);
+    }
+
     fn key(&mut self, event_loop: &ActiveEventLoop, event: KeyEvent) {
         if event.state != ElementState::Pressed {
             return;
         }
+        self.on_key(event_loop, event.logical_key.as_ref());
+    }
+
+    fn on_key(&mut self, event_loop: &ActiveEventLoop, key: Key<&str>) {
         let Some(target) = self.surface.as_ref() else { return };
         let window = target.window.clone();
-        if let Key::Character(c) = event.logical_key.as_ref() {
+        if let Key::Character(c) = key {
             let shift = self.modifiers.shift_key();
             if self.lives.key(self.py, self.timeline, self.time, &c.to_lowercase(), shift) {
                 window.request_redraw();
                 return;
             }
         }
-        match event.logical_key.as_ref() {
+        match key {
             Key::Named(NamedKey::ArrowRight | NamedKey::Space | NamedKey::PageDown | NamedKey::ArrowDown) => {
                 self.forward()
             }
@@ -340,6 +430,7 @@ impl ApplicationHandler for App<'_> {
             self.close(event_loop);
             return;
         }
+        self.drive(event_loop);
         // let Ctrl-C in the terminal stop the window
         if let Err(error) = self.py.check_signals() {
             self.error = Some(error);
