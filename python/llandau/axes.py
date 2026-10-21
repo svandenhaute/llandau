@@ -40,12 +40,13 @@ def _labels(strings, size):
 
 class NumberLine(Line):
     """A line from x_range[0] to x_range[1] with ticks every x_range[2]; centered
-    at the origin, as in manim."""
+    at the origin, as in manim. tick_side: "both" (across the line, as in manim),
+    "above" or "below" it (before the rotation)."""
 
     def __init__(self, x_range=None, length: float | None = None, unit_size: float = 1, include_ticks: bool = True,
-                 tick_size: float = 0.1, numbers_with_elongated_ticks=None, longer_tick_multiple: int = 2,
-                 exclude_origin_tick: bool = False, rotation: float = 0, stroke_width: float = 2.0,
-                 include_tip: bool = False, tip_width: float = DEFAULT_ARROW_TIP_LENGTH,
+                 tick_size: float = 0.1, tick_side: str = "both", numbers_with_elongated_ticks=None,
+                 longer_tick_multiple: int = 2, exclude_origin_tick: bool = False, rotation: float = 0,
+                 stroke_width: float = 2.0, include_tip: bool = False, tip_width: float = DEFAULT_ARROW_TIP_LENGTH,
                  tip_height: float = DEFAULT_ARROW_TIP_LENGTH, include_numbers: bool = False, font_size: float = 36,
                  label_direction=DOWN, line_to_number_buff: float = MED_SMALL_BUFF, decimal_number_config=None,
                  numbers_to_exclude=None, numbers_to_include=None, color=None, **kwargs):
@@ -56,6 +57,7 @@ class NumberLine(Line):
         self.x_range = np.array(x_range, dtype=float)
         self.x_min, self.x_max, self.x_step = self.x_range
         self.tick_size = tick_size
+        self.tick_side = {"both": 0, "above": 1, "below": -1}[tick_side]
         self.numbers_with_elongated_ticks = list(numbers_with_elongated_ticks or [])
         self.longer_tick_multiple = longer_tick_multiple
         self.exclude_origin_tick = exclude_origin_tick
@@ -109,6 +111,11 @@ class NumberLine(Line):
     def get_unit_size(self) -> float:
         return float(np.linalg.norm(self.get_unit_vector()))
 
+    def _directions(self):
+        """The unit vectors along the line and across it (to its left)."""
+        along = self.get_unit_vector() / self.get_unit_size()
+        return along, np.array([-along[1], along[0], 0.0])
+
     def number_to_point(self, number):
         number = np.asarray(number, dtype=float)
         a, b = self._ends
@@ -127,10 +134,8 @@ class NumberLine(Line):
 
     def get_tick(self, x: float, size: float | None = None) -> Line:
         size = self.tick_size if size is None else size
-        direction = self.get_unit_vector()
-        normal = np.array([-direction[1], direction[0], 0.0])
-        normal /= np.linalg.norm(normal)
-        center = self.number_to_point(x)
+        _, normal = self._directions()
+        center = self.number_to_point(x) + self.tick_side * size * normal
         return Line(center - size * normal, center + size * normal, stroke_width=self.stroke_width,
                     color=self.stroke_color)
 
@@ -170,6 +175,21 @@ class NumberLine(Line):
         self.add(labels)
         self.labels = labels
         return labels
+
+    def get_histogram(self, values, bins=10, range=None, height: float = 1.0, gap: float = 0.0, **kwargs) -> VGroup:
+        """A histogram of values standing on the line: a bar per nonempty bin, over its edges
+        less `gap` between neighbors, the fullest `height` tall. range: the line's by default."""
+        counts, edges = np.histogram(values, bins=bins, range=range or (self.x_min, self.x_max))
+        direction, normal = self._directions()
+        kwargs = {"fill_opacity": 1, "stroke_width": 0, **kwargs}
+        bars = VGroup()
+        for count, lo, hi in zip(counts, edges[:-1], edges[1:]):
+            if count:
+                a, b = self.number_to_point(lo) + gap / 2 * direction, self.number_to_point(hi) - gap / 2 * direction
+                up = height * count / counts.max() * normal
+                bars.add(Polygon(a, b, b + up, a + up, **kwargs))
+        return bars
+
 
 
 def _origin_shift(lo: float, hi: float) -> float:

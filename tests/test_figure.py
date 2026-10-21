@@ -3,7 +3,7 @@ import re
 import numpy as np
 import pytest
 
-from llandau import Deck, LIGHT, R, build, place, subplots
+from llandau import Deck, LIGHT, NumberLine, R, build, place, subplots
 
 
 def figure():
@@ -130,3 +130,19 @@ def test_tick_labels_stay_with_their_ticks():
     ax.set_xticks([1, 10], ["one"])
     with pytest.raises(ValueError):
         ax._ensure()
+
+
+def test_histogram_stands_on_its_number_line():
+    line = NumberLine([0, 4, 1], length=2.0)
+    bars = line.get_histogram([0.5, 1.5, 1.5, 3.5], bins=4, height=1.0)
+    assert len(bars) == 3  # the empty bin has no bar
+    assert np.allclose([bar.get_bottom()[1] for bar in bars], line.get_center()[1])
+    assert np.allclose([bar.height for bar in bars], [0.5, 1.0, 0.5])
+    assert np.allclose([bar.get_left()[0] for bar in bars], line.number_to_point([0, 1, 3])[:, 0])
+
+
+def test_ticks_on_one_side_of_the_line():
+    for side, sign in (("above", 1), ("below", -1)):
+        line = NumberLine([0, 2, 1], length=2.0, tick_size=0.1, tick_side=side)
+        tick = line.ticks[0]
+        assert np.isclose(tick.get_center()[1], sign * 0.1) and np.isclose(tick.height, 0.2)
