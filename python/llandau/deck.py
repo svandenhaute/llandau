@@ -42,11 +42,19 @@ class Deck(Scene):
         if self.numbered and self.number is not None:
             self.add(text(str(self.number), size=LABEL).to_corner(DR, buff=0.3))
 
+    # the step's live views play until here (a recording, the move to a camera): the step ends after
+    _live_until = 0.0
+
     def step(self, notes: str = ""):
         """End the current slide step. The short wait guarantees the step isn't empty.
         notes belong to the step that starts here (manim-slides attaches them to the next step)."""
         self.wait(MIN_STEP)
         self.next_slide(notes=notes)
+
+    def next_slide(self, notes: str = "", **kwargs):
+        if self.time < self._live_until:
+            self.wait(self._live_until - self.time)
+        return super().next_slide(notes, **kwargs)
 
     def reveal(self, *mobs, anim=None, run_time: float | None = None, lag: float = 0,
                replace=None, pause: bool = True, notes: str = ""):
@@ -93,13 +101,15 @@ class Deck(Scene):
         theme = "light" if self.theme.bg.to_rgb().mean() > 0.5 else "dark"
         state = _live.load_state(state) if state is not None else None
         play = _live.load_recording(play) if play is not None else None
-        self.next_slide()  # no wait: no empty step
+        # ends the step as it is (no wait: no empty step), not after the live views' play: several
+        # live() calls in a row share a step
+        Scene.next_slide(self)
         self._builder.live(self, scene, theme, region, view, opens, state, play)
         # the step lasts as long as what plays on its clock: a recording, or the move to a camera
         if play:
-            self.wait(play[-1][0])
+            self._live_until = max(self._live_until, self.time + play[-1][0])
         elif "camera" in view or (state and "camera" in state):
-            self.wait(_live.CAMERA_MOVE)
+            self._live_until = max(self._live_until, self.time + _live.CAMERA_MOVE)
         if not still:
             return None
         pixels = (round(2 * config.pixel_width * region.width / config.frame_width),

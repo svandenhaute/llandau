@@ -200,6 +200,28 @@ def test_live_grid_opens():
     assert len(deck.marks) == 1 and deck.num_lives == 4  # the views and the text share the first step
 
 
+def test_live_grid_with_cameras_stays_one_step():
+    """Views with a camera each still share the step: the move to the cameras plays before it ends."""
+    from llandau import live_scene
+    from llandau.live import CAMERA_MOVE
+
+    for k in range(3):
+        @live_scene(f"turned{k}")
+        def cell(viewer, k=k):
+            viewer.load(np.zeros((1, 1, 3), np.float32), np.array([6 + k]))
+
+    class Turned(Deck):
+        theme = LIGHT
+
+        def construct(self):
+            for k, region in enumerate(R.body.cols(3)):
+                self.live(f"turned{k}", region, still=False, opens=R.body, camera={"azimuth": 40 * k})
+
+    deck = build([Turned])
+    assert len(deck.marks) == 1 and deck.num_lives == 3
+    assert deck.marks[0][0] >= CAMERA_MOVE
+
+
 def test_layer_step_keys():
     """Labels order as number then letter: 1 < 1a < 1b < 2 < 10 < 11, and "11" is not a sub-step of 1."""
     from llandau.media import step_key, _steps, Layer
@@ -310,6 +332,6 @@ def test_live_state_and_play_set_the_step():
     deck = build([Played])
     marks = [t for t, _, _ in deck.marks]
     assert marks[0] >= 2.0  # the recording's 2 s, then the reveal
-    assert marks[1] - marks[0] >= CAMERA_MOVE  # the move to the state's camera
+    assert marks[1] - marks[0] >= CAMERA_MOVE - 1e-6  # the move to the state's camera
     assert marks[2] - marks[1] < CAMERA_MOVE  # a frame is set at once
     assert deck.num_lives == 3
