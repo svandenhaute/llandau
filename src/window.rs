@@ -17,7 +17,6 @@ use std::time::{Duration, Instant};
 use egui::{Color32, Key, PointerButton, RichText, Sense};
 use numpy::{PyArray1, PyArrayMethods};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::WindowEvent;
@@ -25,10 +24,10 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::platform::run_on_demand::EventLoopExtRunOnDemand;
 use winit::window::{Fullscreen, Window, WindowId};
 
-use crate::camera::Camera;
-use crate::plots::{self, Plots};
+use crate::Viewer;
+use crate::plots;
 use crate::recording::{Recording, State};
-use crate::render::{Gpu, Offscreen};
+use crate::render::Offscreen;
 
 const PANEL_WIDTH: f32 = 300.0;
 const PLAY_INTERVAL: Duration = Duration::from_millis(33);
@@ -102,64 +101,6 @@ pub struct Options {
     pub record_fps: f64,
 }
 
-/// What the explorer needs from the viewer, implemented in lib.rs.
-pub trait Explorable {
-    fn gpu(&self) -> &Gpu;
-    fn prepare(&mut self);
-    fn draw_into(&mut self, view: &wgpu::TextureView, format: wgpu::TextureFormat, size: (u32, u32), viewport: [f32; 4]);
-    fn controls(&mut self) -> &mut dyn Controls;
-}
-
-/// The settings the panel edits.
-pub trait Controls {
-    fn frame(&self) -> usize;
-    fn set_frame(&mut self, frame: usize);
-    fn num_frames(&self) -> usize;
-    fn num_discrete_frames(&self) -> usize;
-    fn scrub_discrete(&self) -> bool;
-    fn set_scrub_discrete(&mut self, on: bool);
-    fn theme(&self) -> &'static str;
-    fn set_theme(&mut self, name: &str);
-    fn has_roles(&self) -> bool;
-    fn shading(&self) -> &'static str;
-    fn set_shading(&mut self, shading: &str);
-    fn style(&self) -> &'static str;
-    fn set_style(&mut self, style: &str);
-    fn sidechains(&self) -> &'static str;
-    fn set_sidechains(&mut self, sidechains: &str);
-    fn coloring_names(&self) -> Vec<String>;
-    fn coloring(&self) -> Option<String>;
-    fn set_coloring(&mut self, name: Option<String>);
-    /// toggleable layers: (name, visible)
-    fn layers(&self) -> Vec<(String, bool)>;
-    fn set_visible(&mut self, layer: &str, visible: bool);
-    fn color_gamma(&self) -> f32;
-    fn set_color_gamma(&mut self, gamma: f32);
-    fn fog(&self) -> f32;
-    fn set_fog(&mut self, fog: f32);
-    fn occlusion(&self) -> f32;
-    fn set_occlusion(&mut self, occlusion: f32);
-    fn radius_scale(&self) -> f32;
-    fn set_radius_scale(&mut self, scale: f32);
-    fn surface_opacity(&self) -> f32;
-    fn set_surface_opacity(&mut self, opacity: f32);
-    fn surface_colors_by_atom(&self) -> bool;
-    fn set_surface_colors_by_atom(&mut self, by_atom: bool);
-    fn vector_scales(&self) -> Vec<(String, f32)>;
-    fn set_vector_scale(&mut self, name: &str, scale: f32);
-    fn orbit(&mut self, dx: f32, dy: f32);
-    fn pan(&mut self, dx: f32, dy: f32, height: f32);
-    fn zoom(&mut self, factor: f32);
-    fn reset_camera(&mut self);
-    fn camera(&self) -> Camera;
-    fn set_camera(&mut self, camera: Camera);
-    fn plots(&self) -> &Plots;
-    /// whether the plots are shown large
-    fn show_plots(&self) -> bool;
-    fn set_show_plots(&mut self, on: bool);
-    fn camera_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>>;
-}
-
 struct Surface {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -168,8 +109,8 @@ struct Surface {
     egui_renderer: egui_wgpu::Renderer,
 }
 
-struct App<'a, V: Explorable> {
-    viewer: &'a mut V,
+struct App<'a> {
+    viewer: &'a mut Viewer,
     py: Python<'a>,
     options: Options,
     egui: egui::Context,
@@ -212,9 +153,9 @@ pub fn with_event_loop<T>(f: impl FnOnce(&mut EventLoop<()>) -> PyResult<T>) -> 
     })
 }
 
-pub fn explore<V: Explorable>(viewer: &mut V, py: Python<'_>, options: Options) -> PyResult<()> {
+pub fn explore(viewer: &mut Viewer, py: Python<'_>, options: Options) -> PyResult<()> {
     with_event_loop(|event_loop| {
-        let initial_scales = viewer.controls().vector_scales();
+        let initial_scales = viewer.vector_scales();
         let mut app = App {
             viewer,
             py,
@@ -247,13 +188,13 @@ pub fn explore<V: Explorable>(viewer: &mut V, py: Python<'_>, options: Options) 
     })
 }
 
-impl<V: Explorable> App<'_, V> {
+impl App<'_> {
     fn create_surface(&mut self, event_loop: &ActiveEventLoop) -> Result<Surface, String> {
         let attributes = Window::default_attributes()
             .with_title(self.options.title.clone())
             .with_inner_size(LogicalSize::new(self.options.size.0, self.options.size.1));
         let window = Arc::new(event_loop.create_window(attributes).map_err(|e| e.to_string())?);
-        let gpu = self.viewer.gpu();
+        let gpu = &self.viewer.gpu;
         let surface = gpu.instance.create_surface(window.clone()).map_err(|e| e.to_string())?;
         let capabilities = surface.get_capabilities(&gpu.adapter);
         let format = capabilities
@@ -295,9 +236,9 @@ impl<V: Explorable> App<'_, V> {
     fn redraw(&mut self) {
         if self.playing && self.last_step.elapsed() >= PLAY_INTERVAL {
             self.last_step = Instant::now();
-            let controls = self.viewer.controls();
-            let count = controls.num_frames().max(1);
-            controls.set_frame((controls.frame() + 1) % count);
+            let count = self.viewer.num_frames().max(1);
+            let frame = (self.viewer.frame + 1) % count;
+            self.viewer.set_frame(frame);
         }
         let Some(mut target) = self.surface.take() else { return };
         let raw_input = target.egui_state.take_egui_input(&target.window);
@@ -333,7 +274,7 @@ impl<V: Explorable> App<'_, V> {
         let screenshot = self.options.screenshot.clone().filter(|_| self.frames_drawn >= 2);
         let size = (target.config.width, target.config.height);
         let format = target.config.format;
-        let (device, queue) = (self.viewer.gpu().device.clone(), self.viewer.gpu().queue.clone());
+        let (device, queue) = (self.viewer.gpu.device.clone(), self.viewer.gpu.queue.clone());
         for (id, deltas) in &output.textures_delta.set {
             for delta in deltas {
                 target.egui_renderer.update_texture(&device, &queue, *id, delta);
@@ -363,8 +304,7 @@ impl<V: Explorable> App<'_, V> {
             _ => unreachable!(),
         };
 
-        self.viewer.prepare();
-        self.viewer.draw_into(&view, format, size, viewport);
+        self.viewer.draw_into(&view, format, size, Some(viewport));
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("egui") });
         target.egui_renderer.update_buffers(&device, &queue, &mut encoder, &paint_jobs, &screen);
@@ -391,7 +331,7 @@ impl<V: Explorable> App<'_, V> {
         match (surface_texture, screenshot, offscreen) {
             (Some(texture), _, _) => queue.present(texture),
             (None, Some(path), Some(offscreen)) => {
-                let pixels = offscreen.read(self.viewer.gpu());
+                let pixels = offscreen.read(&self.viewer.gpu);
                 if let Err(error) = save_png(&path, size, format, &pixels) {
                     self.error = Some(crate::runtime_error(error));
                 }
@@ -414,7 +354,7 @@ impl<V: Explorable> App<'_, V> {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui) {
-        let dark = self.viewer.controls().theme() == "dark";
+        let dark = self.viewer.theme() == "dark";
         ui.ctx().set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
         self.keys(ui);
         if !self.panel_hidden {
@@ -430,12 +370,12 @@ impl<V: Explorable> App<'_, V> {
                 });
         }
         let x = self.plot_x();
-        let controls = self.viewer.controls();
-        if controls.show_plots() && !controls.plots().is_empty() {
+        let v = &*self.viewer;
+        if v.show_plots && !v.plots.is_empty() {
             egui::Panel::bottom("plots")
                 .exact_size((PLOTS_HEIGHT * ui.available_height()).round())
                 .resizable(false)
-                .show(ui, |ui| controls.plots().large(ui, x, PLOTS_TEXT));
+                .show(ui, |ui| v.plots.large(ui, x, PLOTS_TEXT));
         }
         // the 3D view shows through the central panel, which only takes input
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
@@ -455,12 +395,12 @@ impl<V: Explorable> App<'_, V> {
         }
         let pressed = |key| ui.input(|i| i.key_pressed(key));
         let shift = ui.input(|i| i.modifiers.shift);
-        let controls = self.viewer.controls();
+        let v = &mut *self.viewer;
         if pressed(Key::Space) || pressed(Key::P) {
             self.playing = !self.playing;
         }
         // shift: jump 5% of the trajectory (at least 10 frames)
-        let count = controls.num_frames().max(1) as i64;
+        let count = v.num_frames().max(1) as i64;
         let jump = if shift { (count / 20).max(10) } else { 1 };
         for (key, step) in [
             (Key::ArrowLeft, -jump),
@@ -471,42 +411,40 @@ impl<V: Explorable> App<'_, V> {
             (Key::End, count),
         ] {
             if pressed(key) {
-                step_frames(controls, step);
+                step_frames(v, step);
             }
         }
         if pressed(Key::D) {
-            toggle_discrete(controls);
+            toggle_discrete(v);
         }
         if pressed(Key::Num0) {
-            controls.reset_camera();
+            v.reset_camera();
         }
         if pressed(Key::Plus) || pressed(Key::Equals) {
-            controls.zoom(1.0 / ZOOM_STEP);
+            v.zoom(1.0 / ZOOM_STEP);
         }
         if pressed(Key::Minus) {
-            controls.zoom(ZOOM_STEP);
+            v.zoom(ZOOM_STEP);
         }
         if pressed(Key::T) {
-            let next = if controls.theme() == "dark" { "light" } else { "dark" };
-            controls.set_theme(next);
+            let _ = v.set_theme(if v.theme() == "dark" { "light" } else { "dark" });
         }
         if pressed(Key::L) {
-            toggle_shading(controls);
+            toggle_shading(v);
         }
         if pressed(Key::S) {
-            if shift { toggle_sidechains(controls) } else { toggle_style(controls) }
+            if shift { toggle_sidechains(v) } else { toggle_style(v) }
         }
         if pressed(Key::C) {
-            next_coloring(controls);
+            next_coloring(v);
         }
         for (index, key) in NUMBER_KEYS.into_iter().enumerate() {
             if pressed(key) {
-                toggle_layer(controls, index);
+                toggle_layer(v, index);
             }
         }
         if pressed(Key::G) {
-            let on = !controls.show_plots();
-            controls.set_show_plots(on);
+            v.show_plots = !v.show_plots;
         }
         if pressed(Key::H) {
             self.panel_hidden = !self.panel_hidden;
@@ -538,28 +476,27 @@ impl<V: Explorable> App<'_, V> {
         } else {
             (0.0, 1.0)
         };
-        let num_frames = self.viewer.controls().num_frames().max(1);
+        let num_frames = self.viewer.num_frames().max(1);
         if scroll != 0.0 {
             self.scroll -= scroll / SCROLL_PER_FRAME * self.scroll_gain(scroll, shift, num_frames);
         }
         let steps = self.scroll.trunc();
         self.scroll -= steps;
 
-        let controls = self.viewer.controls();
+        let v = &mut *self.viewer;
         if response.dragged_by(PointerButton::Primary) && !shift {
-            controls.orbit(delta.x, delta.y);
+            v.orbit(delta.x, delta.y);
         } else if response.dragged_by(PointerButton::Secondary) || (response.dragged_by(PointerButton::Primary) && shift) {
-            controls.pan(delta.x, delta.y, height);
+            v.pan(delta.x, delta.y, height);
         }
         if response.double_clicked() {
-            controls.reset_camera();
+            v.reset_camera();
         }
         if zoom != 1.0 {
-            controls.zoom(1.0 / zoom);
+            v.zoom(1.0 / zoom);
         }
         if steps != 0.0 {
-            let frame = (controls.frame() as i64 + steps as i64).clamp(0, num_frames as i64 - 1);
-            controls.set_frame(frame as usize);
+            step_frames(v, steps as i64);
         }
     }
 
@@ -577,15 +514,15 @@ impl<V: Explorable> App<'_, V> {
             ui.label(info.clone());
             ui.separator();
         }
-        let controls = self.viewer.controls();
+        let v = &mut *self.viewer;
 
         // frames
-        let count = controls.num_frames().max(1);
-        let mut frame = controls.frame();
+        let count = v.num_frames().max(1);
+        let mut frame = v.frame;
         ui.horizontal(|ui| {
             ui.label("frame");
             if ui.add(egui::Slider::new(&mut frame, 0..=count - 1)).changed() {
-                controls.set_frame(frame);
+                v.set_frame(frame);
             }
             hint(ui, "← →");
         });
@@ -594,40 +531,38 @@ impl<V: Explorable> App<'_, V> {
                 self.playing = !self.playing;
             }
             hint(ui, "Space");
-            if controls.num_discrete_frames() > 0 {
-                let mut on = controls.scrub_discrete();
+            if v.num_discrete_frames() > 0 {
+                let mut on = v.scene.scrub_discrete;
                 if ui.checkbox(&mut on, "scrub discrete").changed() {
-                    controls.set_scrub_discrete(on);
+                    let _ = v.set_scrub_discrete(on);
                 }
                 hint(ui, "D");
             }
         });
         self.record_controls(ui);
-        let controls = self.viewer.controls();
+        let v = &mut *self.viewer;
         ui.separator();
 
         // appearance
         egui::Grid::new("appearance").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-            choice(ui, "theme", "T", &["light", "dark"], controls.theme(), |name| controls.set_theme(name));
+            choice(ui, "theme", "T", &["light", "dark"], v.theme(), |name| drop(v.set_theme(name)));
             ui.end_row();
-            choice(ui, "shading", "L", &["lit", "flat"], controls.shading(), |s| controls.set_shading(s));
+            choice(ui, "shading", "L", &["lit", "flat"], v.shading(), |s| drop(v.set_shading(s)));
             ui.end_row();
-            if controls.has_roles() {
-                choice(ui, "style", "S", &["atoms", "protein"], controls.style(), |s| controls.set_style(s));
+            if v.has_roles() {
+                choice(ui, "style", "S", &["atoms", "protein"], v.style(), |s| drop(v.set_style(s)));
                 ui.end_row();
-                choice(ui, "side chains", "⇧S", &["sticks", "spheres"], controls.sidechains(), |s| {
-                    controls.set_sidechains(s)
-                });
+                choice(ui, "side chains", "⇧S", &["sticks", "spheres"], v.sidechains(), |s| drop(v.set_sidechains(s)));
                 ui.end_row();
             }
-            let colorings = controls.coloring_names();
+            let colorings = v.coloring_names();
             if !colorings.is_empty() {
                 let names: Vec<&str> = std::iter::once("element").chain(colorings.iter().map(String::as_str)).collect();
-                let current = controls.coloring().unwrap_or_else(|| "element".into());
+                let current = v.scene.coloring.clone().unwrap_or_else(|| "element".into());
                 let mut picked = None;
                 choice(ui, "color", "C", &names, &current, |name| picked = Some(name.to_string()));
                 if let Some(name) = picked {
-                    controls.set_coloring(Some(name).filter(|n| n != "element"));
+                    let _ = v.set_coloring(Some(name).filter(|n| n != "element"));
                 }
                 ui.end_row();
             }
@@ -635,11 +570,11 @@ impl<V: Explorable> App<'_, V> {
         ui.separator();
 
         // layers
-        for (index, (layer, visible)) in controls.layers().into_iter().enumerate() {
+        for (index, (layer, visible)) in v.layers().into_iter().enumerate() {
             let mut on = visible;
             ui.horizontal(|ui| {
                 if ui.checkbox(&mut on, layer.as_str()).changed() {
-                    controls.set_visible(&layer, on);
+                    let _ = v.set_visible(&layer, on);
                 }
                 if index < NUMBER_KEYS.len() {
                     hint(ui, &(index + 1).to_string());
@@ -650,47 +585,47 @@ impl<V: Explorable> App<'_, V> {
 
         // sizes
         egui::Grid::new("sizes").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-            let mut gamma = controls.color_gamma();
+            let mut gamma = v.color_gamma();
             ui.label("color depth");
             if ui.add(egui::Slider::new(&mut gamma, 1.0..=2.4)).changed() {
-                controls.set_color_gamma(gamma);
+                v.set_color_gamma(gamma);
             }
             ui.end_row();
-            let mut fog = controls.fog();
+            let mut fog = v.fog();
             ui.label("fog");
             if ui.add(egui::Slider::new(&mut fog, 0.0..=1.0)).changed() {
-                controls.set_fog(fog);
+                v.set_fog(fog);
             }
             ui.end_row();
-            let mut occlusion = controls.occlusion();
+            let mut occlusion = v.scene.occlusion;
             ui.label("occlusion");
             if ui.add(egui::Slider::new(&mut occlusion, 0.0..=1.0)).changed() {
-                controls.set_occlusion(occlusion);
+                v.set_occlusion(occlusion);
             }
             ui.end_row();
-            let mut radius = controls.radius_scale();
+            let mut radius = v.scene.radius_scale;
             ui.label("atom radius");
             if ui.add(egui::Slider::new(&mut radius, 0.1..=2.0)).changed() {
-                controls.set_radius_scale(radius);
+                v.set_radius_scale(radius);
             }
             ui.end_row();
-            let mut opacity = controls.surface_opacity();
+            let mut opacity = v.scene.surface.opacity;
             ui.label("surface opacity");
             if ui.add(egui::Slider::new(&mut opacity, 0.05..=1.0)).changed() {
-                controls.set_surface_opacity(opacity);
+                v.set_surface_opacity(opacity);
             }
             ui.end_row();
-            let by_atom = controls.surface_colors_by_atom();
+            let by_atom = v.scene.surface.colors == crate::scene::SurfaceColors::Atoms;
             choice(ui, "surface color", "", &["uniform", "atoms"], if by_atom { "atoms" } else { "uniform" }, |c| {
-                controls.set_surface_colors_by_atom(c == "atoms")
+                v.set_surface_colors_by_atom(c == "atoms")
             });
             ui.end_row();
-            for (name, scale) in controls.vector_scales() {
+            for (name, scale) in v.vector_scales() {
                 let initial = self.initial_scales.iter().find(|(n, _)| *n == name).map_or(scale, |(_, s)| *s);
                 let mut value = scale;
                 ui.label(format!("{name} length"));
                 if ui.add(egui::Slider::new(&mut value, 0.0..=(4.0 * initial).max(1e-3))).changed() {
-                    controls.set_vector_scale(&name, value);
+                    let _ = v.set_vector_scale(&name, value);
                 }
                 ui.end_row();
             }
@@ -719,12 +654,12 @@ impl<V: Explorable> App<'_, V> {
 
         // plots, unless shown large
         let x = self.plot_x();
-        let controls = self.viewer.controls();
-        if !controls.show_plots() {
-            controls.plots().small(ui, x);
+        let v = &*self.viewer;
+        if !v.show_plots {
+            v.plots.small(ui, x);
         }
         ui.add_space(8.0);
-        let large = if controls.plots().is_empty() { "" } else { "G large plots · " };
+        let large = if v.plots.is_empty() { "" } else { "G large plots · " };
         ui.label(RichText::new(format!("? keys · {large}H hide panel · F full screen")).small().weak());
     }
 
@@ -780,7 +715,7 @@ impl<V: Explorable> App<'_, V> {
                 let recorder = self.options.recorder.as_ref().expect("recording without a recorder");
                 match recorder.call1(self.py, size) {
                     Ok(writer) => {
-                        let target = Box::new(Offscreen::with_format(&self.viewer.gpu().device, size, VIDEO_FORMAT));
+                        let target = Box::new(Offscreen::with_format(&self.viewer.gpu.device, size, VIDEO_FORMAT));
                         self.record = Record::Rendering { recording, size, writer, target, next: 0, total };
                     }
                     Err(error) => self.status = format!("{error}"),
@@ -796,7 +731,7 @@ impl<V: Explorable> App<'_, V> {
         match &mut self.record {
             Record::Off => {}
             Record::On { start, recording, .. } => {
-                recording.push(start.elapsed().as_secs_f64(), State::capture(self.viewer.controls()));
+                recording.push(start.elapsed().as_secs_f64(), State::capture(self.viewer));
             }
             Record::Rendering { .. } => {
                 if let Err(error) = self.render_frames() {
@@ -810,18 +745,17 @@ impl<V: Explorable> App<'_, V> {
         let Record::Rendering { recording, size, writer, target, next, total } = &mut self.record else {
             return Ok(());
         };
-        let live = State::capture(self.viewer.controls());
+        let live = State::capture(self.viewer);
         let mut current = live.clone();
         let started = Instant::now();
         let mut result = Ok(());
         while *next < *total && started.elapsed() < RENDER_BUDGET {
             let Some(state) = recording.at(*next as f64 / self.options.record_fps) else { break };
-            state.apply(self.viewer.controls(), &current);
+            state.apply(self.viewer, &current);
             current = state;
-            self.viewer.prepare();
             let (width, height) = *size;
-            self.viewer.draw_into(target.view(), VIDEO_FORMAT, *size, [0.0, 0.0, width as f32, height as f32]);
-            let pixels = target.read(self.viewer.gpu());
+            self.viewer.draw_into(target.view(), VIDEO_FORMAT, *size, None);
+            let pixels = target.read(&self.viewer.gpu);
             result = PyArray1::from_vec(self.py, pixels)
                 .reshape([height as usize, width as usize, 4])
                 .and_then(|frame| writer.call_method1(self.py, "write", (frame,)))
@@ -831,7 +765,7 @@ impl<V: Explorable> App<'_, V> {
             }
             *next += 1;
         }
-        live.apply(self.viewer.controls(), &current);
+        live.apply(self.viewer, &current);
         result?;
         if *next >= *total {
             let path: String = writer.call_method0(self.py, "close")?.extract(self.py)?;
@@ -881,7 +815,7 @@ impl<V: Explorable> App<'_, V> {
     }
 
     fn copy_text(&mut self, which: Option<usize>) -> PyResult<String> {
-        let camera = self.viewer.controls().camera_dict(self.py)?;
+        let camera = self.viewer.camera(self.py)?;
         match which {
             None => {
                 let json = self.py.import("json")?;
@@ -893,8 +827,8 @@ impl<V: Explorable> App<'_, V> {
 
     /// Where the plots' cursor is: the path parameter of the current frame.
     fn plot_x(&mut self) -> f64 {
-        let c = self.viewer.controls();
-        c.plots().x(c.frame(), c.num_frames(), c.scrub_discrete())
+        let v = &*self.viewer;
+        v.plots.x(v.frame, v.num_frames(), v.scene.scrub_discrete)
     }
 }
 
@@ -903,51 +837,41 @@ const NUMBER_KEYS: [Key; 9] =
 
 // what the explorer's and the live views' keys do
 
-pub(crate) fn step_frames(c: &mut dyn Controls, step: i64) {
-    let count = c.num_frames().max(1) as i64;
-    c.set_frame((c.frame() as i64 + step).clamp(0, count - 1) as usize);
+pub(crate) fn step_frames(v: &mut Viewer, step: i64) {
+    let count = v.num_frames().max(1) as i64;
+    v.set_frame((v.frame as i64 + step).clamp(0, count - 1) as usize);
 }
 
-pub(crate) fn toggle_discrete(c: &mut dyn Controls) {
-    if c.num_discrete_frames() > 0 {
-        let on = !c.scrub_discrete();
-        c.set_scrub_discrete(on);
-    }
+pub(crate) fn toggle_discrete(v: &mut Viewer) {
+    let _ = v.set_scrub_discrete(!v.scene.scrub_discrete);
 }
 
-pub(crate) fn toggle_shading(c: &mut dyn Controls) {
-    let next = if c.shading() == "lit" { "flat" } else { "lit" };
-    c.set_shading(next);
+pub(crate) fn toggle_shading(v: &mut Viewer) {
+    let _ = v.set_shading(if v.shading() == "lit" { "flat" } else { "lit" });
 }
 
-pub(crate) fn toggle_style(c: &mut dyn Controls) {
-    if c.has_roles() {
-        let next = if c.style() == "atoms" { "protein" } else { "atoms" };
-        c.set_style(next);
-    }
+pub(crate) fn toggle_style(v: &mut Viewer) {
+    let _ = v.set_style(if v.style() == "atoms" { "protein" } else { "atoms" });
 }
 
-pub(crate) fn toggle_sidechains(c: &mut dyn Controls) {
-    if c.has_roles() {
-        let next = if c.sidechains() == "sticks" { "spheres" } else { "sticks" };
-        c.set_sidechains(next);
-    }
+pub(crate) fn toggle_sidechains(v: &mut Viewer) {
+    let _ = v.set_sidechains(if v.sidechains() == "sticks" { "spheres" } else { "sticks" });
 }
 
 /// Element colors, then each named coloring in turn.
-pub(crate) fn next_coloring(c: &mut dyn Controls) {
-    let names = c.coloring_names();
-    let next = match c.coloring() {
+pub(crate) fn next_coloring(v: &mut Viewer) {
+    let names = v.coloring_names();
+    let next = match &v.scene.coloring {
         None => names.first().cloned(),
-        Some(current) => names.iter().position(|n| *n == current).and_then(|i| names.get(i + 1)).cloned(),
+        Some(current) => names.iter().position(|n| n == current).and_then(|i| names.get(i + 1)).cloned(),
     };
-    c.set_coloring(next);
+    let _ = v.set_coloring(next);
 }
 
 /// The `index`th layer (as the panel lists them) on or off.
-pub(crate) fn toggle_layer(c: &mut dyn Controls, index: usize) {
-    if let Some((name, visible)) = c.layers().into_iter().nth(index) {
-        c.set_visible(&name, !visible);
+pub(crate) fn toggle_layer(v: &mut Viewer, index: usize) {
+    if let Some((name, visible)) = v.layers().into_iter().nth(index) {
+        let _ = v.set_visible(&name, !visible);
     }
 }
 
@@ -989,14 +913,10 @@ pub(crate) fn save_png(path: &str, size: (u32, u32), format: wgpu::TextureFormat
     if matches!(format, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb) {
         rgba.chunks_exact_mut(4).for_each(|p| p.swap(0, 2));
     }
-    let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
-    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), size.0, size.1);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder.write_header().and_then(|mut w| w.write_image_data(&rgba)).map_err(|e| e.to_string())
+    image::save_buffer(path, &rgba, size.0, size.1, image::ColorType::Rgba8).map_err(|e| e.to_string())
 }
 
-impl<V: Explorable> ApplicationHandler for App<'_, V> {
+impl ApplicationHandler for App<'_> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.surface.is_some() {
             return;
@@ -1021,7 +941,7 @@ impl<V: Explorable> ApplicationHandler for App<'_, V> {
             WindowEvent::Resized(size) => {
                 target.config.width = size.width.max(1);
                 target.config.height = size.height.max(1);
-                target.surface.configure(&self.viewer.gpu().device, &target.config);
+                target.surface.configure(&self.viewer.gpu.device, &target.config);
                 target.window.request_redraw();
             }
             WindowEvent::RedrawRequested => self.redraw(),

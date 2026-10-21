@@ -47,8 +47,6 @@ pub struct Geometry {
     pub spheres: Vec<SphereInstance>,
     pub tubes: Vec<LatheInstance>,
     pub cones: Vec<LatheInstance>,
-    pub ghost_spheres: Vec<SphereInstance>,
-    pub ghost_tubes: Vec<LatheInstance>,
     /// drawn over everything (clash links)
     pub overlay: Vec<LatheInstance>,
     /// triangle list of the molecular surface, opaque or translucent (front layer only)
@@ -76,6 +74,10 @@ pub struct Structure {
     pub discrete: Option<Vec<Vec3>>,
     /// element colors per theme (light, dark), swapped in on a theme change
     pub theme_colors: [Option<Vec<Rgba>>; 2],
+    /// every atom; the heavy atoms (all, without roles); the CAs in residue order
+    pub all: Vec<usize>,
+    pub heavy: Vec<usize>,
+    pub alphas: Vec<usize>,
 }
 
 impl Structure {
@@ -90,6 +92,12 @@ impl Structure {
     ) -> Self {
         let chains = roles.as_deref().map_or_else(Vec::new, |r| protein::chains(r, &positions[..num_atoms]));
         let excluded = clash::exclusions(num_atoms, &edges);
+        let all: Vec<usize> = (0..num_atoms).collect();
+        let heavy = match &roles {
+            Some(r) => all.iter().copied().filter(|&a| r[a] != HYDROGEN).collect(),
+            None => all.clone(),
+        };
+        let alphas = chains.iter().flatten().copied().collect();
         Self {
             num_atoms,
             positions,
@@ -103,6 +111,9 @@ impl Structure {
             excluded,
             discrete: None,
             theme_colors: [None, None],
+            all,
+            heavy,
+            alphas,
         }
     }
 
@@ -117,10 +128,6 @@ impl Structure {
 
     pub fn num_discrete_frames(&self) -> usize {
         self.discrete.as_ref().map_or(0, |d| d.len() / self.num_atoms.max(1))
-    }
-
-    fn role(&self, atom: usize) -> Option<u8> {
-        self.roles.as_ref().map(|r| r[atom])
     }
 
     /// Center and radius of a sphere holding every atom of every frame.
@@ -140,6 +147,21 @@ impl Structure {
     }
 }
 
+/// name() and parse() for an enum whose variants Python names.
+macro_rules! named {
+    ($t:ident { $($v:ident = $n:literal),+ $(,)? }) => {
+        impl $t {
+            pub const NAMES: &'static [&'static str] = &[$($n),+];
+            pub fn name(self) -> &'static str {
+                match self { $(Self::$v => $n),+ }
+            }
+            pub fn parse(name: &str) -> Option<Self> {
+                match name { $($n => Some(Self::$v),)+ _ => None }
+            }
+        }
+    };
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Style {
     /// ball and stick, every atom
@@ -147,6 +169,7 @@ pub enum Style {
     /// backbone tube and side chains, no hydrogens
     Protein,
 }
+named!(Style { Atoms = "atoms", Protein = "protein" });
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sidechains {
@@ -154,6 +177,7 @@ pub enum Sidechains {
     /// van der Waals spheres: the space the side chains take up
     Spheres,
 }
+named!(Sidechains { Sticks = "sticks", Spheres = "spheres" });
 
 pub struct VectorField {
     /// frames * atoms, or atoms (the same every frame); or one per origin
@@ -173,11 +197,6 @@ pub struct Points {
     pub visible: bool,
 }
 
-pub struct Coloring {
-    /// frames * atoms, or atoms (the same every frame)
-    pub colors: Vec<Rgba>,
-}
-
 pub struct Trails {
     pub visible: bool,
     /// per segment (frames - 1): explicit colors, else alternating theme colors by segment id
@@ -194,6 +213,7 @@ pub enum SurfaceColors {
     /// the color of the nearest atom (element colors or the coloring in use)
     Atoms,
 }
+named!(SurfaceColors { Uniform = "uniform", Atoms = "atoms" });
 
 /// A Gaussian molecular surface around the heavy atoms (protein style) or all atoms.
 pub struct Surface {
@@ -219,14 +239,14 @@ pub struct Scene {
     pub show_atoms: bool,
     pub radius_scale: f32,
     pub bond_radius: f32,
-    pub bond_color: Option<Rgba>,
     pub stick_radius: f32,
     pub tube_radius: f32,
     pub arrow_radius: f32,
     pub trails: Trails,
     pub vectors: BTreeMap<String, VectorField>,
     pub points: BTreeMap<String, Points>,
-    pub colorings: BTreeMap<String, Coloring>,
+    /// per-atom colors: frames * atoms, or atoms (the same every frame)
+    pub colorings: BTreeMap<String, Vec<Rgba>>,
     /// name of the coloring in use; None: element colors
     pub coloring: Option<String>,
     pub ghost: Option<Ghost>,
@@ -260,7 +280,6 @@ impl Default for Scene {
             show_atoms: true,
             radius_scale: 1.0,
             bond_radius: 0.12,
-            bond_color: None,
             stick_radius: 0.16,
             tube_radius: 0.32,
             arrow_radius: 0.05,
@@ -296,31 +315,30 @@ fn per_frame<T: Copy>(data: &[T], num_atoms: usize, frame: usize) -> &[T] {
 }
 
 impl Scene {
-    /// Atoms that carry trails and arrows in the current style.
-    fn marked_atoms(&self, s: &Structure, trails: bool) -> Vec<usize> {
-        (0..s.num_atoms)
-            .filter(|&a| match (self.style, s.role(a)) {
-                (Style::Protein, Some(role)) if trails => role == ALPHA,
-                (Style::Protein, Some(role)) => role != HYDROGEN,
-                _ => true,
-            })
-            .collect()
+    fn protein(&self, s: &Structure) -> bool {
+        self.style == Style::Protein && s.roles.is_some()
+    }
+
+    /// The atoms the style draws: the heavy atoms in the protein style, else all.
+    fn drawn_atoms<'a>(&self, s: &'a Structure) -> &'a [usize] {
+        if self.protein(s) { &s.heavy } else { &s.all }
+    }
+
+    /// The atoms that carry trails: the CAs in the protein style, else all.
+    fn trailed_atoms<'a>(&self, s: &'a Structure) -> &'a [usize] {
+        if self.protein(s) { &s.alphas } else { &s.all }
     }
 
     fn atom_colors(&self, s: &Structure, frame: usize) -> Vec<Rgba> {
         match self.coloring.as_ref().and_then(|name| self.colorings.get(name)) {
-            Some(coloring) => per_frame(&coloring.colors, s.num_atoms, frame).to_vec(),
+            Some(colors) => per_frame(colors, s.num_atoms, frame).to_vec(),
             None => s.colors.clone(),
         }
     }
 
     /// Clashing pairs (i, j, overlap) at `positions`; in the protein style, among heavy atoms.
     pub fn clashes(&self, s: &Structure, positions: &[Vec3]) -> Vec<(usize, usize, f32)> {
-        let atoms: Vec<usize> = match self.style {
-            Style::Protein if s.roles.is_some() => (0..s.num_atoms).filter(|&a| s.role(a) != Some(HYDROGEN)).collect(),
-            _ => (0..s.num_atoms).collect(),
-        };
-        clash::find(positions, &s.vdw, &atoms, &s.excluded, self.clash_overlap)
+        clash::find(positions, &s.vdw, self.drawn_atoms(s), &s.excluded, self.clash_overlap)
     }
 
     /// Positions of `frame` and the path frame it corresponds to: with
@@ -348,9 +366,8 @@ impl Scene {
         let mut colors = self.atom_colors(s, path_frame);
         let mut backbone = s.backbone_colors.clone();
         if self.occlusion > 0.0 {
-            let atoms: Vec<usize> = (0..s.num_atoms).collect();
             let shade: Vec<f32> =
-                occlusion::buried(positions, &s.vdw, &atoms).iter().map(|b| 1.0 - self.occlusion * b).collect();
+                occlusion::buried(positions, &s.vdw, &s.all).iter().map(|b| 1.0 - self.occlusion * b).collect();
             let darken = |c: Rgba, f: f32| [c[0] * f, c[1] * f, c[2] * f, c[3]];
             for (c, &f) in colors.iter_mut().zip(&shade) {
                 *c = darken(*c, f);
@@ -374,23 +391,11 @@ impl Scene {
         }
 
         if self.show_atoms {
-            let bond = self.bond_color.unwrap_or(self.theme.bond);
-            let palette = Palette { bond, tube: self.theme.tube, backbone };
+            let palette = Palette { bond: self.theme.bond, tube: self.theme.tube, backbone };
             self.draw_structure(s, positions, &colors, &palette, &mut out.spheres, &mut out.tubes);
         }
 
-        if let Some(ghost) = self.ghost.as_ref().filter(|g| g.visible && g.positions.len() == s.num_atoms) {
-            let fade = |c: &Rgba| theme::fade(*c, self.theme.background, ghost.fade, ghost.opacity);
-            let colors: Vec<Rgba> = s.colors.iter().map(fade).collect();
-            let palette = Palette {
-                bond: fade(&self.bond_color.unwrap_or(self.theme.bond)),
-                tube: fade(&self.theme.tube),
-                backbone: s.backbone_colors.as_ref().map(|b| b.iter().map(fade).collect()),
-            };
-            self.draw_structure(s, &ghost.positions, &colors, &palette, &mut out.ghost_spheres, &mut out.ghost_tubes);
-        }
-
-        let marked = self.marked_atoms(s, false);
+        let marked = self.drawn_atoms(s);
         for field in self.vectors.values().filter(|f| f.visible) {
             let color = field.color.unwrap_or(self.theme.vector);
             match &field.origins {
@@ -402,7 +407,7 @@ impl Scene {
                 // atom vectors belong to the path frames
                 None if on_path => {
                     let vectors = per_frame(&field.vectors, s.num_atoms, frame);
-                    for &a in &marked {
+                    for &a in marked {
                         self.arrow(positions[a], field.scale * vectors[a], color, &mut out);
                     }
                 }
@@ -411,16 +416,12 @@ impl Scene {
         }
         if self.surface.visible {
             let opacity = self.surface.opacity.clamp(0.0, 1.0);
-            let atoms: Vec<usize> = match self.style {
-                Style::Protein if s.roles.is_some() => (0..s.num_atoms).filter(|&a| s.role(a) != Some(HYDROGEN)).collect(),
-                _ => (0..s.num_atoms).collect(),
-            };
+            let tinted = |c: Rgba| [c[0], c[1], c[2], opacity];
             let tint: Vec<Rgba> = match self.surface.colors {
-                SurfaceColors::Uniform => vec![self.theme.surface; s.num_atoms],
-                SurfaceColors::Atoms => colors.clone(),
+                SurfaceColors::Uniform => vec![tinted(self.theme.surface); s.num_atoms],
+                SurfaceColors::Atoms => colors.iter().map(|&c| tinted(c)).collect(),
             };
-            let tint: Vec<Rgba> = tint.iter().map(|c| [c[0], c[1], c[2], opacity]).collect();
-            let mesh = surface::gaussian_surface(positions, &s.vdw, &tint, &atoms, &self.surface.settings);
+            let mesh = surface::gaussian_surface(positions, &s.vdw, &tint, self.drawn_atoms(s), &self.surface.settings);
             if opacity < 1.0 { out.ghost_surface = mesh } else { out.surface = mesh }
         }
         for points in self.points.values().filter(|p| p.visible) {
@@ -431,6 +432,24 @@ impl Scene {
             }));
         }
         out
+    }
+
+    /// The ghost: a faded copy of the structure at its own positions (it does not
+    /// change with the frame).
+    pub fn ghost_geometry(&self) -> (Vec<SphereInstance>, Vec<LatheInstance>) {
+        let (mut spheres, mut tubes) = (Vec::new(), Vec::new());
+        let Some(s) = &self.structure else { return (spheres, tubes) };
+        if let Some(ghost) = self.ghost.as_ref().filter(|g| g.visible && g.positions.len() == s.num_atoms) {
+            let fade = |c: &Rgba| theme::fade(*c, self.theme.background, ghost.fade, ghost.opacity);
+            let colors: Vec<Rgba> = s.colors.iter().map(fade).collect();
+            let palette = Palette {
+                bond: fade(&self.theme.bond),
+                tube: fade(&self.theme.tube),
+                backbone: s.backbone_colors.as_ref().map(|b| b.iter().map(fade).collect()),
+            };
+            self.draw_structure(s, &ghost.positions, &colors, &palette, &mut spheres, &mut tubes);
+        }
+        (spheres, tubes)
     }
 
     fn arrow(&self, start: Vec3, vector: Vec3, color: Rgba, out: &mut Geometry) {
@@ -458,7 +477,7 @@ impl Scene {
         let sphere = |p: Vec3, radius: f32, color: Rgba| SphereInstance { center: p.to_array(), radius, color };
         let joint = |p: Vec3, radius: f32, color: Rgba| sphere(p, -radius, color);
 
-        if self.style == Style::Atoms || s.roles.is_none() {
+        if !self.protein(s) {
             let bond = palette.bond;
             spheres.extend((0..s.num_atoms).map(|a| sphere(positions[a], self.radius_scale * s.radii[a], colors[a])));
             tubes.extend(s.edges.iter().map(|&[i, j]| {
@@ -532,7 +551,7 @@ impl Scene {
         };
         let frames = s.num_frames();
         let mut out = Vec::new();
-        for a in self.marked_atoms(s, true) {
+        for &a in self.trailed_atoms(s) {
             for segment in 0..frames - 1 {
                 let (p, q) = (s.positions[segment * s.num_atoms + a], s.positions[(segment + 1) * s.num_atoms + a]);
                 let color = segment_color(segment);

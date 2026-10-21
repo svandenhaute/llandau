@@ -1,5 +1,5 @@
 //! llandau: smooth scientific slides drawn live (`slides`), and a viewer for atomic
-//! trajectories that draws into decks, the explorer window, a native window handle or offscreen.
+//! trajectories that draws into decks, the explorer window or offscreen.
 
 pub mod camera;
 pub mod clash;
@@ -14,19 +14,15 @@ pub mod surface;
 pub mod theme;
 pub mod window;
 
-use std::ffi::c_void;
-use std::ptr::NonNull;
-
 use glam::Vec3;
 use numpy::{PyArray1, PyArrayMethods, PyReadonlyArrayDyn, PyUntypedArrayMethods};
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
 use camera::Camera;
 use render::{Gpu, Offscreen, Renderer};
-use scene::{Coloring, Ghost, Points, Scene, Sidechains, Structure, Style, SurfaceColors, VectorField};
+use scene::{Ghost, Points, Scene, Sidechains, Structure, Style, SurfaceColors, VectorField};
 use theme::{Rgba, Theme};
 
 pub(crate) fn runtime_error(message: impl std::fmt::Display) -> PyErr {
@@ -35,36 +31,6 @@ pub(crate) fn runtime_error(message: impl std::fmt::Display) -> PyErr {
 
 pub(crate) fn value_error(message: impl std::fmt::Display) -> PyErr {
     PyValueError::new_err(message.to_string())
-}
-
-/// Display and window handles from a native window id, as Qt's `winId()` returns it.
-fn raw_handles(handle: usize) -> PyResult<(RawDisplayHandle, RawWindowHandle)> {
-    let pointer = NonNull::new(handle as *mut c_void).ok_or_else(|| value_error("null window handle"))?;
-    #[cfg(target_os = "macos")]
-    {
-        use raw_window_handle::{AppKitDisplayHandle, AppKitWindowHandle};
-        Ok((
-            RawDisplayHandle::AppKit(AppKitDisplayHandle::new()),
-            RawWindowHandle::AppKit(AppKitWindowHandle::new(pointer)),
-        ))
-    }
-    #[cfg(target_os = "windows")]
-    {
-        use raw_window_handle::{Win32WindowHandle, WindowsDisplayHandle};
-        let hwnd = std::num::NonZeroIsize::new(pointer.as_ptr() as isize).unwrap();
-        Ok((
-            RawDisplayHandle::Windows(WindowsDisplayHandle::new()),
-            RawWindowHandle::Win32(Win32WindowHandle::new(hwnd)),
-        ))
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        use raw_window_handle::{XlibDisplayHandle, XlibWindowHandle};
-        Ok((
-            RawDisplayHandle::Xlib(XlibDisplayHandle::new(None, 0)),
-            RawWindowHandle::Xlib(XlibWindowHandle::new(pointer.as_ptr() as _)),
-        ))
-    }
 }
 
 // --- numpy conversions ---------------------------------------------------------
@@ -94,42 +60,46 @@ fn rgba(color: &[f32]) -> PyResult<Rgba> {
     }
 }
 
-fn theme_index(name: &str) -> PyResult<usize> {
-    match name {
-        "light" => Ok(0),
-        "dark" => Ok(1),
-        _ => Err(value_error(format!("unknown theme {name:?}; light or dark"))),
-    }
+/// A name among `options` (as a parsed value), else a ValueError naming them.
+fn parsed<T>(value: Option<T>, what: &str, name: &str, options: &[&str]) -> PyResult<T> {
+    value.ok_or_else(|| value_error(format!("unknown {what} {name:?}; {}", options.join(" or "))))
 }
 
-struct Window {
-    surface: wgpu::Surface<'static>,
-    config: wgpu::SurfaceConfiguration,
+#[derive(Clone, Copy, Default)]
+struct Stale {
+    frame: bool,
+    trails: bool,
+    ghost: bool,
 }
 
-/// A trajectory viewer. Draw into a native window with `attach` + `render`,
-/// or offscreen with `render_image`.
+const ALL: Stale = Stale { frame: true, trails: true, ghost: true };
+/// the ghost copies the structure in its look (sizes, colors, side chains)
+const LOOK: Stale = Stale { frame: true, trails: false, ghost: true };
+const FRAME: Stale = Stale { frame: true, trails: false, ghost: false };
+
+/// A trajectory viewer: draws into a texture (the explorer, a deck's live view) or
+/// offscreen with `render_image`. The explorer and live views use its fields and
+/// methods directly; Python sees the `pymethods`.
 #[pyclass(unsendable, subclass)]
 pub struct Viewer {
-    gpu: Gpu,
+    pub(crate) gpu: Gpu,
     renderer: Renderer,
-    camera: Camera,
+    pub(crate) camera: Camera,
     home: Camera,
-    scene: Scene,
-    frame: usize,
-    /// whether the frame geometry and the trails need uploading
-    stale: (bool, bool),
-    window: Option<Window>,
+    pub(crate) scene: Scene,
+    pub(crate) frame: usize,
+    /// what needs uploading: the frame's geometry, the trails, the ghost
+    stale: Stale,
     offscreen: Option<Offscreen>,
-    plots: plots::Plots,
+    pub(crate) plots: plots::Plots,
     /// the plots shown large: under the explorer's view, over a live view
-    show_plots: bool,
+    pub(crate) show_plots: bool,
 }
 
 impl Viewer {
-    /// Draw into `view` (`size` pixels, `format`), for a deck's live region; with a
-    /// viewport (left, top, width, height in pixels), only there.
-    pub(crate) fn draw_into_view(
+    /// Draw into `view` (`size` pixels, `format`); with a viewport (left, top,
+    /// width, height in pixels), only there.
+    pub(crate) fn draw_into(
         &mut self,
         view: &wgpu::TextureView,
         format: wgpu::TextureFormat,
@@ -141,23 +111,26 @@ impl Viewer {
     }
 
     fn upload(&mut self) {
-        let (geometry, trails) = self.stale;
-        if geometry {
-            let geometry = self.scene.geometry(self.frame);
-            self.renderer.upload(&self.gpu.device, &self.gpu.queue, &geometry);
+        let (device, queue) = (&self.gpu.device, &self.gpu.queue);
+        if self.stale.frame {
+            self.renderer.upload(device, queue, &self.scene.geometry(self.frame));
         }
-        if trails {
-            let trails = self.scene.trails();
-            self.renderer.upload_trails(&self.gpu.device, &self.gpu.queue, &trails);
+        if self.stale.trails {
+            self.renderer.upload_trails(device, queue, &self.scene.trails());
+        }
+        if self.stale.ghost {
+            let (spheres, tubes) = self.scene.ghost_geometry();
+            self.renderer.upload_ghost(device, queue, &spheres, &tubes);
         }
         self.renderer.background = self.scene.theme.background;
         self.renderer.outline = self.scene.theme.outline;
-        self.stale = (false, false);
+        self.stale = Stale::default();
     }
 
-    /// Mark everything for upload.
-    fn changed(&mut self) {
-        self.stale = (true, true);
+    /// Mark (some of) the geometry for upload.
+    fn changed(&mut self, what: Stale) {
+        let s = &mut self.stale;
+        *s = Stale { frame: s.frame | what.frame, trails: s.trails | what.trails, ghost: s.ghost | what.ghost };
     }
 
     fn structure(&self) -> PyResult<&Structure> {
@@ -177,8 +150,46 @@ impl Viewer {
         )))
     }
 
-    fn height(&self) -> f32 {
-        self.window.as_ref().map_or(1000.0, |w| w.config.height as f32)
+    /// Toggleable layers, as the explorer lists them: (name, visible).
+    pub(crate) fn layers(&self) -> Vec<(String, bool)> {
+        let s = &self.scene;
+        let mut layers = vec![("atoms".into(), s.show_atoms), ("surface".into(), s.surface.visible)];
+        if self.num_path_frames() > 1 {
+            layers.push(("trails".into(), s.trails.visible));
+        }
+        if let Some(ghost) = &s.ghost {
+            layers.push(("ghost".into(), ghost.visible));
+        }
+        layers.push(("clashes".into(), s.show_clashes));
+        layers.extend(s.vectors.iter().map(|(name, field)| (name.clone(), field.visible)));
+        layers.extend(s.points.iter().map(|(name, points)| (name.clone(), points.visible)));
+        layers
+    }
+
+    fn add_field(&mut self, name: String, vectors: Vec<Vec3>, origins: Option<Vec<Vec3>>, color: Option<Vec<f32>>, scale: f32, visible: bool) -> PyResult<()> {
+        let color = color.as_deref().map(rgba).transpose()?;
+        self.scene.vectors.insert(name, VectorField { vectors, origins, color, scale, visible });
+        self.changed(FRAME);
+        Ok(())
+    }
+
+    pub(crate) fn vector_scales(&self) -> Vec<(String, f32)> {
+        self.scene.vectors.iter().map(|(name, field)| (name.clone(), field.scale)).collect()
+    }
+
+    pub(crate) fn set_radius_scale(&mut self, scale: f32) {
+        self.scene.radius_scale = scale;
+        self.changed(LOOK);
+    }
+
+    pub(crate) fn set_surface_opacity(&mut self, opacity: f32) {
+        self.scene.surface.opacity = opacity;
+        self.changed(FRAME);
+    }
+
+    pub(crate) fn set_surface_colors_by_atom(&mut self, by_atom: bool) {
+        self.scene.surface.colors = if by_atom { SurfaceColors::Atoms } else { SurfaceColors::Uniform };
+        self.changed(FRAME);
     }
 }
 
@@ -197,8 +208,7 @@ impl Viewer {
             home: Camera::default(),
             scene: Scene::default(),
             frame: 0,
-            stale: (true, true),
-            window: None,
+            stale: ALL,
             offscreen: None,
             plots: plots::Plots::default(),
             show_plots: false,
@@ -212,77 +222,6 @@ impl Viewer {
     fn adapter(&self) -> String {
         let info = self.gpu.adapter.get_info();
         format!("{} ({:?}, {:?})", info.name, info.backend, info.device_type)
-    }
-
-    /// Draw into the native window `handle` (an NSView on macOS, HWND on Windows,
-    /// X11 window otherwise) of `width` x `height` physical pixels.
-    fn attach(&mut self, handle: usize, width: u32, height: u32) -> PyResult<()> {
-        let (raw_display_handle, raw_window_handle) = raw_handles(handle)?;
-        // Safety: the caller keeps the window alive while this viewer draws into it
-        // (the Qt widget owns both and detaches before it is destroyed).
-        let surface = unsafe {
-            self.gpu.instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-                raw_display_handle: Some(raw_display_handle),
-                raw_window_handle,
-            })
-        }
-        .map_err(runtime_error)?;
-        let capabilities = surface.get_capabilities(&self.gpu.adapter);
-        let format = capabilities
-            .formats
-            .iter()
-            .copied()
-            .find(|f| f.is_srgb())
-            .or_else(|| capabilities.formats.first().copied())
-            .ok_or_else(|| runtime_error("the window surface supports no format"))?;
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
-            width: width.max(1),
-            height: height.max(1),
-            present_mode: wgpu::PresentMode::AutoVsync,
-            desired_maximum_frame_latency: 2,
-            alpha_mode: capabilities.alpha_modes[0],
-            view_formats: vec![],
-            color_space: wgpu::SurfaceColorSpace::Auto,
-        };
-        surface.configure(&self.gpu.device, &config);
-        self.window = Some(Window { surface, config });
-        Ok(())
-    }
-
-    /// Stop drawing into the window (call before it is destroyed).
-    fn detach(&mut self) {
-        self.window = None;
-    }
-
-    fn resize(&mut self, width: u32, height: u32) {
-        if let Some(window) = &mut self.window {
-            window.config.width = width.max(1);
-            window.config.height = height.max(1);
-            window.surface.configure(&self.gpu.device, &window.config);
-        }
-    }
-
-    /// Draw one frame into the attached window.
-    fn render(&mut self) -> PyResult<()> {
-        self.upload();
-        let Some(window) = &self.window else {
-            return Err(runtime_error("no window attached"));
-        };
-        let texture = match window.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                window.surface.configure(&self.gpu.device, &window.config);
-                return Ok(());
-            }
-            _ => return Ok(()), // timeout or occluded: skip this frame
-        };
-        let view = texture.texture.create_view(&Default::default());
-        let size = (window.config.width, window.config.height);
-        self.renderer.draw(&self.gpu.device, &self.gpu.queue, &view, window.config.format, size, None, &self.camera);
-        self.gpu.queue.present(texture);
-        Ok(())
     }
 
     /// Draw offscreen; returns an (height, width, 4) uint8 RGBA array.
@@ -393,7 +332,7 @@ impl Viewer {
         self.scene.scrub_discrete = false;
         self.scene.trails.colors = None;
         self.scene.trails.segment_ids = None;
-        self.changed();
+        self.changed(ALL);
         Ok(())
     }
 
@@ -414,7 +353,7 @@ impl Viewer {
             self.scene.scrub_discrete = false;
         }
         self.frame = 0;
-        self.changed();
+        self.changed(FRAME);
         Ok(())
     }
 
@@ -442,7 +381,7 @@ impl Viewer {
         self.scene.scrub_discrete = on;
         let new = self.num_frames().max(2) - 1;
         self.frame = (self.frame as f32 * new as f32 / old as f32).round() as usize;
-        self.changed();
+        self.changed(FRAME);
         Ok(())
     }
 
@@ -453,7 +392,7 @@ impl Viewer {
         self.frame = 0;
         self.plots = plots::Plots::default();
         self.show_plots = false;
-        self.changed();
+        self.changed(ALL);
     }
 
     /// Scalars to plot along the trajectory, with a cursor at the current frame:
@@ -491,7 +430,7 @@ impl Viewer {
         if colors.len() != self.structure()?.num_atoms {
             return Err(value_error("colors: one per atom"));
         }
-        let current = self.theme();
+        let current = self.scene.theme;
         let structure = self.scene.structure.as_mut().unwrap();
         match theme {
             None => {
@@ -499,14 +438,14 @@ impl Viewer {
                 structure.colors = colors;
             }
             Some(name) => {
-                let index = theme_index(name)?;
-                if name == current {
+                let theme = parsed(Theme::named(name), "theme", name, Theme::NAMES)?;
+                if theme == current {
                     structure.colors = colors.clone();
                 }
-                structure.theme_colors[index] = Some(colors);
+                structure.theme_colors[(theme == theme::DARK) as usize] = Some(colors);
             }
         }
-        self.changed();
+        self.changed(LOOK);
         Ok(())
     }
 
@@ -522,7 +461,7 @@ impl Viewer {
             return Err(value_error(format!("backbone colors: {} for {num_alpha} CA atoms", c.len())));
         }
         structure.backbone_colors = colors;
-        self.changed();
+        self.changed(LOOK);
         Ok(())
     }
 
@@ -541,11 +480,6 @@ impl Viewer {
         self.scene.structure.as_ref().map_or(0, Structure::num_frames)
     }
 
-    #[getter]
-    fn num_atoms(&self) -> usize {
-        self.scene.structure.as_ref().map_or(0, |s| s.num_atoms)
-    }
-
     /// Whether the structure has protein roles (needed for the protein style).
     #[getter]
     fn has_roles(&self) -> bool {
@@ -562,7 +496,7 @@ impl Viewer {
         let frame = frame.min(self.num_frames().saturating_sub(1));
         if frame != self.frame {
             self.frame = frame;
-            self.stale.0 = true;
+            self.stale.frame = true;
         }
     }
 
@@ -576,14 +510,13 @@ impl Viewer {
 
     #[setter]
     fn set_theme(&mut self, name: &str) -> PyResult<()> {
-        self.scene.theme = Theme::named(name).ok_or_else(|| value_error(format!("unknown theme {name:?}")))?;
-        let index = theme_index(name)?;
+        self.scene.theme = parsed(Theme::named(name), "theme", name, Theme::NAMES)?;
         if let Some(structure) = &mut self.scene.structure
-            && let Some(colors) = &structure.theme_colors[index]
+            && let Some(colors) = &structure.theme_colors[(self.scene.theme == theme::DARK) as usize]
         {
             structure.colors = colors.clone();
         }
-        self.changed();
+        self.changed(ALL);
         Ok(())
     }
 
@@ -621,7 +554,7 @@ impl Viewer {
     #[setter]
     fn set_occlusion(&mut self, occlusion: f32) {
         self.scene.occlusion = occlusion.clamp(0.0, 1.0);
-        self.changed();
+        self.changed(FRAME);
     }
 
     /// "lit" (lighting and highlights) or "flat" (plain colors with a dark
@@ -633,51 +566,33 @@ impl Viewer {
 
     #[setter]
     fn set_shading(&mut self, shading: &str) -> PyResult<()> {
-        self.renderer.flat = match shading {
-            "lit" => false,
-            "flat" => true,
-            _ => return Err(value_error(format!("unknown shading {shading:?}; lit or flat"))),
-        };
+        self.renderer.flat = parsed(["lit", "flat"].iter().position(|n| *n == shading), "shading", shading, &["lit", "flat"])? == 1;
         Ok(())
     }
 
     /// "atoms" (ball and stick) or "protein" (backbone tube and side chains; needs roles).
     #[getter]
     fn style(&self) -> &'static str {
-        match self.scene.style {
-            Style::Atoms => "atoms",
-            Style::Protein => "protein",
-        }
+        self.scene.style.name()
     }
 
     #[setter]
     fn set_style(&mut self, style: &str) -> PyResult<()> {
-        self.scene.style = match style {
-            "atoms" => Style::Atoms,
-            "protein" => Style::Protein,
-            _ => return Err(value_error(format!("unknown style {style:?}; atoms or protein"))),
-        };
-        self.changed();
+        self.scene.style = parsed(Style::parse(style), "style", style, Style::NAMES)?;
+        self.changed(ALL);
         Ok(())
     }
 
     /// Side chains in the protein style: "sticks" or "spheres" (van der Waals).
     #[getter]
     fn sidechains(&self) -> &'static str {
-        match self.scene.sidechains {
-            Sidechains::Sticks => "sticks",
-            Sidechains::Spheres => "spheres",
-        }
+        self.scene.sidechains.name()
     }
 
     #[setter]
     fn set_sidechains(&mut self, sidechains: &str) -> PyResult<()> {
-        self.scene.sidechains = match sidechains {
-            "sticks" => Sidechains::Sticks,
-            "spheres" => Sidechains::Spheres,
-            _ => return Err(value_error(format!("unknown side chains {sidechains:?}; sticks or spheres"))),
-        };
-        self.changed();
+        self.scene.sidechains = parsed(Sidechains::parse(sidechains), "side chains", sidechains, Sidechains::NAMES)?;
+        self.changed(LOOK);
         Ok(())
     }
 
@@ -698,32 +613,7 @@ impl Viewer {
                 other => return Err(PyKeyError::new_err(other.to_string())),
             }
         }
-        self.changed();
-        Ok(())
-    }
-
-    #[getter]
-    fn sizes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let s = &self.scene;
-        let dict = PyDict::new(py);
-        for (key, value) in [
-            ("radius_scale", s.radius_scale),
-            ("bond_radius", s.bond_radius),
-            ("stick_radius", s.stick_radius),
-            ("tube_radius", s.tube_radius),
-            ("arrow_radius", s.arrow_radius),
-            ("trail_radius", s.trails.radius),
-        ] {
-            dict.set_item(key, value)?;
-        }
-        Ok(dict)
-    }
-
-    /// Bond color in the ball and stick style; None: the theme's.
-    #[setter]
-    fn set_bond_color(&mut self, color: Option<Vec<f32>>) -> PyResult<()> {
-        self.scene.bond_color = color.as_deref().map(rgba).transpose()?;
-        self.changed();
+        self.changed(ALL);
         Ok(())
     }
 
@@ -746,24 +636,8 @@ impl Viewer {
                 (None, None) => return Err(PyKeyError::new_err(name.to_string())),
             },
         }
-        self.changed();
+        self.changed(ALL);
         Ok(())
-    }
-
-    fn is_visible(&self, layer: &str) -> PyResult<bool> {
-        let s = &self.scene;
-        Ok(match layer {
-            "atoms" => s.show_atoms,
-            "trails" => s.trails.visible,
-            "clashes" => s.show_clashes,
-            "surface" => s.surface.visible,
-            "ghost" => s.ghost.as_ref().is_some_and(|g| g.visible),
-            name => match (s.vectors.get(name), s.points.get(name)) {
-                (Some(field), _) => field.visible,
-                (None, Some(points)) => points.visible,
-                (None, None) => return Err(PyKeyError::new_err(name.to_string())),
-            },
-        })
     }
 
     // --- layers ------------------------------------------------------------------
@@ -790,7 +664,7 @@ impl Viewer {
         trails.colors = colors;
         trails.segment_ids = segment_ids;
         trails.opacity = opacity;
-        self.changed();
+        self.changed(ALL);
         Ok(())
     }
 
@@ -806,10 +680,7 @@ impl Viewer {
     ) -> PyResult<()> {
         let vectors = points(&vectors, &name)?;
         self.check_per_atom(vectors.len(), &name)?;
-        let color = color.as_deref().map(rgba).transpose()?;
-        self.scene.vectors.insert(name, VectorField { vectors, origins: None, color, scale, visible });
-        self.changed();
-        Ok(())
+        self.add_field(name, vectors, None, color, scale, visible)
     }
 
     /// Arrows that do not move with the frames: from `origins` (arrows, 3) along
@@ -828,10 +699,7 @@ impl Viewer {
         if origins.len() != vectors.len() {
             return Err(value_error(format!("{name}: {} origins for {} vectors", origins.len(), vectors.len())));
         }
-        let color = color.as_deref().map(rgba).transpose()?;
-        self.scene.vectors.insert(name, VectorField { vectors, origins: Some(origins), color, scale, visible });
-        self.changed();
-        Ok(())
+        self.add_field(name, vectors, Some(origins), color, scale, visible)
     }
 
     /// Fixed spheres at `positions` (points, 3), with `colors` (points, 3|4) or one `color`.
@@ -854,37 +722,23 @@ impl Viewer {
             return Err(value_error(format!("{name}: {} colors for {} points", colors.len(), positions.len())));
         }
         self.scene.points.insert(name, Points { positions, colors, radius, visible });
-        self.changed();
+        self.changed(FRAME);
         Ok(())
-    }
-
-    #[getter]
-    fn point_names(&self) -> Vec<String> {
-        self.scene.points.keys().cloned().collect()
     }
 
     fn set_vector_scale(&mut self, name: &str, scale: f32) -> PyResult<()> {
         let field = self.scene.vectors.get_mut(name).ok_or_else(|| PyKeyError::new_err(name.to_string()))?;
         field.scale = scale;
-        self.changed();
+        self.changed(FRAME);
         Ok(())
-    }
-
-    fn vector_scale(&self, name: &str) -> PyResult<f32> {
-        Ok(self.scene.vectors.get(name).ok_or_else(|| PyKeyError::new_err(name.to_string()))?.scale)
-    }
-
-    #[getter]
-    fn vector_names(&self) -> Vec<String> {
-        self.scene.vectors.keys().cloned().collect()
     }
 
     /// Per-atom colors (frames, atoms, 3|4) or (atoms, 3|4), shown with `coloring = name`.
     fn add_coloring(&mut self, name: String, colors: PyReadonlyArrayDyn<f32>) -> PyResult<()> {
         let colors = self::colors(&colors, &name)?;
         self.check_per_atom(colors.len(), &name)?;
-        self.scene.colorings.insert(name, Coloring { colors });
-        self.changed();
+        self.scene.colorings.insert(name, colors);
+        self.changed(FRAME);
         Ok(())
     }
 
@@ -907,7 +761,7 @@ impl Viewer {
             return Err(PyKeyError::new_err(name.clone()));
         }
         self.scene.coloring = name;
-        self.changed();
+        self.changed(FRAME);
         Ok(())
     }
 
@@ -925,16 +779,8 @@ impl Viewer {
             }
             None => None,
         };
-        self.changed();
+        self.changed(LOOK);
         Ok(())
-    }
-
-    #[setter]
-    fn set_ghost_opacity(&mut self, opacity: f32) {
-        if let Some(ghost) = &mut self.scene.ghost {
-            ghost.opacity = opacity;
-            self.changed();
-        }
     }
 
     /// The molecular surface (show it with set_visible("surface", True)): a smooth
@@ -952,33 +798,16 @@ impl Viewer {
         scale: Option<f32>,
     ) -> PyResult<()> {
         let surface = &mut self.scene.surface;
-        if let Some(colors) = colors {
-            surface.colors = match colors {
-                "uniform" => SurfaceColors::Uniform,
-                "atoms" => SurfaceColors::Atoms,
-                _ => return Err(value_error(format!("unknown surface colors {colors:?}; uniform or atoms"))),
-            };
+        if let Some(name) = colors {
+            surface.colors = parsed(SurfaceColors::parse(name), "surface colors", name, SurfaceColors::NAMES)?;
         }
         surface.opacity = opacity.unwrap_or(surface.opacity);
         let settings = &mut surface.settings;
         settings.spacing = spacing.unwrap_or(settings.spacing);
         settings.sharpness = sharpness.unwrap_or(settings.sharpness);
         settings.scale = scale.unwrap_or(settings.scale);
-        self.changed();
+        self.changed(FRAME);
         Ok(())
-    }
-
-    #[getter]
-    fn surface<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let surface = &self.scene.surface;
-        let dict = PyDict::new(py);
-        dict.set_item("visible", surface.visible)?;
-        dict.set_item("opacity", surface.opacity)?;
-        dict.set_item("colors", if surface.colors == SurfaceColors::Atoms { "atoms" } else { "uniform" })?;
-        dict.set_item("spacing", surface.settings.spacing)?;
-        dict.set_item("sharpness", surface.settings.sharpness)?;
-        dict.set_item("scale", surface.settings.scale)?;
-        Ok(dict)
     }
 
     /// Van der Waals overlap (Å) above which two atoms clash.
@@ -990,7 +819,7 @@ impl Viewer {
     #[setter]
     fn set_clash_overlap(&mut self, overlap: f32) {
         self.scene.clash_overlap = overlap;
-        self.changed();
+        self.changed(FRAME);
     }
 
     /// Clashing atom pairs (i, j, overlap) in the current frame, among the atoms of the style.
@@ -1006,11 +835,8 @@ impl Viewer {
         self.camera.orbit(dx, dy);
     }
 
-    /// Translate by a mouse drag of (dx, dy) pixels, in a view `height` pixels high
-    /// (default: the attached window's).
-    #[pyo3(signature = (dx, dy, height = None))]
-    fn pan(&mut self, dx: f32, dy: f32, height: Option<f32>) {
-        let height = height.unwrap_or_else(|| self.height());
+    /// Translate by a mouse drag of (dx, dy) pixels, in a view `height` pixels high.
+    fn pan(&mut self, dx: f32, dy: f32, height: f32) {
         self.camera.pan(dx, dy, height);
     }
 
@@ -1066,173 +892,4 @@ fn _core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(slides::parse_svg, module)?)?;
     module.add_function(wrap_pyfunction!(slides::image_size, module)?)?;
     Ok(())
-}
-
-// --- the explorer window -------------------------------------------------------
-
-impl window::Explorable for Viewer {
-    fn gpu(&self) -> &Gpu {
-        &self.gpu
-    }
-
-    fn prepare(&mut self) {
-        self.upload();
-    }
-
-    fn draw_into(&mut self, view: &wgpu::TextureView, format: wgpu::TextureFormat, size: (u32, u32), viewport: [f32; 4]) {
-        self.renderer.draw(&self.gpu.device, &self.gpu.queue, view, format, size, Some(viewport), &self.camera);
-    }
-
-    fn controls(&mut self) -> &mut dyn window::Controls {
-        self
-    }
-}
-
-impl window::Controls for Viewer {
-    fn frame(&self) -> usize {
-        self.frame
-    }
-    fn set_frame(&mut self, frame: usize) {
-        Viewer::set_frame(self, frame)
-    }
-    fn num_frames(&self) -> usize {
-        Viewer::num_frames(self)
-    }
-    fn num_discrete_frames(&self) -> usize {
-        Viewer::num_discrete_frames(self)
-    }
-    fn scrub_discrete(&self) -> bool {
-        self.scene.scrub_discrete
-    }
-    fn set_scrub_discrete(&mut self, on: bool) {
-        let _ = Viewer::set_scrub_discrete(self, on);
-    }
-    fn theme(&self) -> &'static str {
-        Viewer::theme(self)
-    }
-    fn set_theme(&mut self, name: &str) {
-        let _ = Viewer::set_theme(self, name);
-    }
-    fn has_roles(&self) -> bool {
-        Viewer::has_roles(self)
-    }
-    fn shading(&self) -> &'static str {
-        Viewer::shading(self)
-    }
-    fn set_shading(&mut self, shading: &str) {
-        let _ = Viewer::set_shading(self, shading);
-    }
-    fn style(&self) -> &'static str {
-        Viewer::style(self)
-    }
-    fn set_style(&mut self, style: &str) {
-        let _ = Viewer::set_style(self, style);
-    }
-    fn sidechains(&self) -> &'static str {
-        Viewer::sidechains(self)
-    }
-    fn set_sidechains(&mut self, sidechains: &str) {
-        let _ = Viewer::set_sidechains(self, sidechains);
-    }
-    fn coloring_names(&self) -> Vec<String> {
-        self.scene.colorings.keys().cloned().collect()
-    }
-    fn coloring(&self) -> Option<String> {
-        self.scene.coloring.clone()
-    }
-    fn set_coloring(&mut self, name: Option<String>) {
-        let _ = Viewer::set_coloring(self, name);
-    }
-    fn layers(&self) -> Vec<(String, bool)> {
-        let s = &self.scene;
-        let mut layers = vec![("atoms".into(), s.show_atoms), ("surface".into(), s.surface.visible)];
-        if self.num_path_frames() > 1 {
-            layers.push(("trails".into(), s.trails.visible));
-        }
-        if let Some(ghost) = &s.ghost {
-            layers.push(("ghost".into(), ghost.visible));
-        }
-        layers.push(("clashes".into(), s.show_clashes));
-        layers.extend(s.vectors.iter().map(|(name, field)| (name.clone(), field.visible)));
-        layers.extend(s.points.iter().map(|(name, points)| (name.clone(), points.visible)));
-        layers
-    }
-    fn set_visible(&mut self, layer: &str, visible: bool) {
-        let _ = Viewer::set_visible(self, layer, visible);
-    }
-    fn color_gamma(&self) -> f32 {
-        self.renderer.color_gamma
-    }
-    fn set_color_gamma(&mut self, gamma: f32) {
-        Viewer::set_color_gamma(self, gamma)
-    }
-    fn fog(&self) -> f32 {
-        self.renderer.fog
-    }
-    fn set_fog(&mut self, fog: f32) {
-        Viewer::set_fog(self, fog)
-    }
-    fn occlusion(&self) -> f32 {
-        self.scene.occlusion
-    }
-    fn set_occlusion(&mut self, occlusion: f32) {
-        Viewer::set_occlusion(self, occlusion)
-    }
-    fn radius_scale(&self) -> f32 {
-        self.scene.radius_scale
-    }
-    fn set_radius_scale(&mut self, scale: f32) {
-        self.scene.radius_scale = scale;
-        self.changed();
-    }
-    fn surface_opacity(&self) -> f32 {
-        self.scene.surface.opacity
-    }
-    fn set_surface_opacity(&mut self, opacity: f32) {
-        self.scene.surface.opacity = opacity;
-        self.changed();
-    }
-    fn surface_colors_by_atom(&self) -> bool {
-        self.scene.surface.colors == SurfaceColors::Atoms
-    }
-    fn set_surface_colors_by_atom(&mut self, by_atom: bool) {
-        self.scene.surface.colors = if by_atom { SurfaceColors::Atoms } else { SurfaceColors::Uniform };
-        self.changed();
-    }
-    fn vector_scales(&self) -> Vec<(String, f32)> {
-        self.scene.vectors.iter().map(|(name, field)| (name.clone(), field.scale)).collect()
-    }
-    fn set_vector_scale(&mut self, name: &str, scale: f32) {
-        let _ = Viewer::set_vector_scale(self, name, scale);
-    }
-    fn orbit(&mut self, dx: f32, dy: f32) {
-        self.camera.orbit(dx, dy);
-    }
-    fn pan(&mut self, dx: f32, dy: f32, height: f32) {
-        self.camera.pan(dx, dy, height);
-    }
-    fn zoom(&mut self, factor: f32) {
-        self.camera.zoom(factor);
-    }
-    fn reset_camera(&mut self) {
-        self.camera = self.home;
-    }
-    fn camera(&self) -> Camera {
-        self.camera
-    }
-    fn plots(&self) -> &plots::Plots {
-        &self.plots
-    }
-    fn show_plots(&self) -> bool {
-        self.show_plots
-    }
-    fn set_show_plots(&mut self, on: bool) {
-        self.show_plots = on;
-    }
-    fn set_camera(&mut self, camera: Camera) {
-        self.camera = camera;
-    }
-    fn camera_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        Viewer::camera(self, py)
-    }
 }

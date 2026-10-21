@@ -125,15 +125,21 @@ struct Targets {
     depth: wgpu::TextureView,
 }
 
-/// A vertex buffer that grows as needed.
-#[derive(Default)]
-struct Instances {
-    buffer: Option<wgpu::Buffer>,
-    count: u32,
+/// A vertex or index buffer that is rewritten every frame and grows as needed
+/// (no allocation while its contents stay below its size).
+pub struct GpuBuffer {
+    pub buffer: Option<wgpu::Buffer>,
+    /// items uploaded last
+    pub count: u32,
+    usage: wgpu::BufferUsages,
 }
 
-impl Instances {
-    fn upload<T: Pod>(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, items: &[T]) {
+impl GpuBuffer {
+    pub fn new(usage: wgpu::BufferUsages) -> Self {
+        Self { buffer: None, count: 0, usage: usage | wgpu::BufferUsages::COPY_DST }
+    }
+
+    pub fn upload<T: Pod>(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, items: &[T]) {
         self.count = items.len() as u32;
         let bytes: &[u8] = bytemuck::cast_slice(items);
         if bytes.is_empty() {
@@ -142,13 +148,23 @@ impl Instances {
         match &self.buffer {
             Some(buffer) if buffer.size() >= bytes.len() as u64 => queue.write_buffer(buffer, 0, bytes),
             _ => {
-                self.buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("instances"),
-                    contents: bytes,
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                }));
+                // twice the size: fewer reallocations as a scene grows
+                let size = (2 * bytes.len() as u64).next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT);
+                let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: None,
+                    size,
+                    usage: self.usage,
+                    mapped_at_creation: false,
+                });
+                queue.write_buffer(&buffer, 0, bytes);
+                self.buffer = Some(buffer);
             }
         }
+    }
+
+    /// The buffer's slice, if anything was uploaded.
+    pub fn slice(&self) -> Option<wgpu::BufferSlice<'_>> {
+        self.buffer.as_ref().filter(|_| self.count > 0).map(|b| b.slice(..))
     }
 }
 
@@ -181,7 +197,7 @@ pub struct Renderer {
     tube: Mesh,
     thin_tube: Mesh,
     cone: Mesh,
-    slots: HashMap<Slot, Instances>,
+    slots: HashMap<Slot, GpuBuffer>,
     pub background: [f32; 4],
     /// decoding gamma of the colors (see linear() in the shaders)
     pub color_gamma: f32,
@@ -230,9 +246,9 @@ impl Renderer {
             globals,
             bind_group,
             layout,
-            sphere_shader: device.create_shader_module(wgpu::include_wgsl!("shaders/spheres.wgsl")),
-            lathe_shader: device.create_shader_module(wgpu::include_wgsl!("shaders/lathe.wgsl")),
-            mesh_shader: device.create_shader_module(wgpu::include_wgsl!("shaders/mesh.wgsl")),
+            sphere_shader: shader(device, "spheres", concat!(include_str!("shaders/common.wgsl"), include_str!("shaders/spheres.wgsl"))),
+            lathe_shader: shader(device, "lathe", concat!(include_str!("shaders/common.wgsl"), include_str!("shaders/lathe.wgsl"))),
+            mesh_shader: shader(device, "mesh", concat!(include_str!("shaders/common.wgsl"), include_str!("shaders/mesh.wgsl"))),
             pipelines: HashMap::new(),
             targets: None,
             tube: Mesh::new(device, "tube", &tube_mesh(24)),
@@ -249,7 +265,7 @@ impl Renderer {
     }
 
     fn upload_slot<T: Pod>(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, slot: Slot, items: &[T]) {
-        self.slots.entry(slot).or_default().upload(device, queue, items);
+        self.slots.entry(slot).or_insert_with(|| GpuBuffer::new(wgpu::BufferUsages::VERTEX)).upload(device, queue, items);
     }
 
     /// Upload the instances that change with the frame.
@@ -258,8 +274,6 @@ impl Renderer {
         self.depth_spheres = geometry.spheres.iter().map(|s| (s.center, s.radius.abs())).collect();
         self.upload_slot(device, queue, Slot::Tubes, &geometry.tubes);
         self.upload_slot(device, queue, Slot::Cones, &geometry.cones);
-        self.upload_slot(device, queue, Slot::GhostSpheres, &geometry.ghost_spheres);
-        self.upload_slot(device, queue, Slot::GhostTubes, &geometry.ghost_tubes);
         self.upload_slot(device, queue, Slot::Overlay, &geometry.overlay);
         self.upload_slot(device, queue, Slot::Surface, &geometry.surface);
         self.upload_slot(device, queue, Slot::GhostSurface, &geometry.ghost_surface);
@@ -267,6 +281,11 @@ impl Renderer {
 
     pub fn upload_trails(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, trails: &[LatheInstance]) {
         self.upload_slot(device, queue, Slot::Trails, trails);
+    }
+
+    pub fn upload_ghost(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, spheres: &[SphereInstance], tubes: &[LatheInstance]) {
+        self.upload_slot(device, queue, Slot::GhostSpheres, spheres);
+        self.upload_slot(device, queue, Slot::GhostTubes, tubes);
     }
 
     /// Draw the uploaded instances into `target`, of `size` pixels; within
@@ -357,7 +376,7 @@ impl Renderer {
             let [x, y, width, height] = viewport;
             pass.set_viewport(x, y, width.max(1.0), height.max(1.0), 0.0, 1.0);
             for &(slot, shader, mesh, variant) in &passes {
-                let Some(Instances { buffer: Some(buffer), count: count @ 1.. }) = self.slots.get(&slot) else {
+                let Some(GpuBuffer { buffer: Some(buffer), count: count @ 1.., .. }) = self.slots.get(&slot) else {
                     continue;
                 };
                 pass.set_pipeline(&self.pipelines[&(format, shader, variant)]);
@@ -491,6 +510,13 @@ impl Renderer {
     }
 }
 
+fn shader(device: &wgpu::Device, label: &str, source: &'static str) -> wgpu::ShaderModule {
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some(label),
+        source: wgpu::ShaderSource::Wgsl(source.into()),
+    })
+}
+
 fn create_targets(device: &wgpu::Device, format: wgpu::TextureFormat, size: (u32, u32)) -> Targets {
     let texture = |label, format| {
         device
@@ -578,8 +604,13 @@ impl Offscreen {
         Self { size, format, texture, view, buffer, padded_row }
     }
 
-    pub fn size(&self) -> (u32, u32) {
-        self.size
+    /// The target in `slot`, made (again) when the size or format differs.
+    pub fn ensure<'a>(slot: &'a mut Option<Self>, device: &wgpu::Device, size: (u32, u32), format: wgpu::TextureFormat) -> &'a Self {
+        let size = (size.0.max(1), size.1.max(1));
+        if !matches!(slot, Some(o) if o.size == size && o.format == format) {
+            *slot = Some(Self::with_format(device, size, format));
+        }
+        slot.as_ref().unwrap()
     }
 
     pub fn view(&self) -> &wgpu::TextureView {
@@ -627,11 +658,7 @@ pub fn render_image(
     size: (u32, u32),
     camera: &Camera,
 ) -> Vec<u8> {
-    let size = (size.0.max(1), size.1.max(1));
-    if !matches!(cache, Some(o) if o.size == size && o.format == Offscreen::FORMAT) {
-        *cache = Some(Offscreen::with_format(&gpu.device, size, Offscreen::FORMAT));
-    }
-    let target = cache.as_ref().unwrap();
-    renderer.draw(&gpu.device, &gpu.queue, &target.view, Offscreen::FORMAT, size, None, camera);
+    let target = Offscreen::ensure(cache, &gpu.device, size, Offscreen::FORMAT);
+    renderer.draw(&gpu.device, &gpu.queue, &target.view, Offscreen::FORMAT, target.size, None, camera);
     target.read(gpu)
 }

@@ -43,6 +43,8 @@ pub const DARK: Theme = Theme {
 };
 
 impl Theme {
+    pub const NAMES: &'static [&'static str] = &["light", "dark"];
+
     pub fn named(name: &str) -> Option<Theme> {
         match name {
             "light" => Some(LIGHT),

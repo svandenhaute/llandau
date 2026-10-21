@@ -220,10 +220,7 @@ impl Slides {
         let size = (width.max(1), height.max(1));
         self.gpu()?;
         let gpu = self.gpu.as_ref().unwrap();
-        if !matches!(&self.offscreen, Some(o) if o.size() == size) {
-            self.offscreen = Some(Offscreen::with_format(&gpu.device, size, FORMAT));
-        }
-        let target = self.offscreen.as_ref().unwrap();
+        let target = Offscreen::ensure(&mut self.offscreen, &gpu.device, size, FORMAT);
         let painter = self.painter.as_mut().unwrap();
         painter.draw(&gpu.device, &gpu.queue, &self.timeline, &self.images, time, target.view(), FORMAT, size);
         let pixels = target.read(gpu);

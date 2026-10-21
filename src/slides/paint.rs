@@ -14,6 +14,7 @@ use lyon::tessellation::{
 use wgpu::util::DeviceExt;
 
 use super::timeline::{Cap, Item, Join, Shape, Style, Timeline};
+use crate::render::GpuBuffer;
 
 const SAMPLES: u32 = 4;
 /// Supersampling on top of the multisampling: rendered at this many times the size.
@@ -90,6 +91,10 @@ pub struct Painter {
     /// tessellations of unchanged shapes, by shape id, at `cache_tolerance`
     cache: HashMap<usize, Mesh>,
     cache_tolerance: f32,
+    /// this frame's geometry (rewritten each frame)
+    vertices: GpuBuffer,
+    indices: GpuBuffer,
+    quads: GpuBuffer,
 }
 
 impl Painter {
@@ -222,6 +227,9 @@ impl Painter {
             targets: None,
             cache: HashMap::new(),
             cache_tolerance: 0.0,
+            vertices: GpuBuffer::new(wgpu::BufferUsages::VERTEX),
+            indices: GpuBuffer::new(wgpu::BufferUsages::INDEX),
+            quads: GpuBuffer::new(wgpu::BufferUsages::VERTEX),
         }
     }
 
@@ -402,14 +410,9 @@ impl Painter {
         queue.write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&frame));
         let srgb = if format.is_srgb() { 1.0 } else { 0.0 };
         queue.write_buffer(&self.blit_frame_buffer, 0, bytemuck::bytes_of(&FrameUniform { srgb, ..frame }));
-        let buffer = |label, contents: &[u8], usage| {
-            // wgpu rejects empty buffers
-            let contents = if contents.is_empty() { &[0u8; 32][..] } else { contents };
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents, usage })
-        };
-        let vertices = buffer("shape vertices", bytemuck::cast_slice(&mesh.vertices), wgpu::BufferUsages::VERTEX);
-        let indices = buffer("shape indices", bytemuck::cast_slice(&mesh.indices), wgpu::BufferUsages::INDEX);
-        let quads = buffer("image vertices", bytemuck::cast_slice(&image_vertices), wgpu::BufferUsages::VERTEX);
+        self.vertices.upload(device, queue, &mesh.vertices);
+        self.indices.upload(device, queue, &mesh.indices);
+        self.quads.upload(device, queue, &image_vertices);
 
         let blit = self.blit_pipeline(device, format).clone();
         let targets = self.targets.as_ref().unwrap();
@@ -433,21 +436,21 @@ impl Painter {
             for command in &commands {
                 match command {
                     Command::Shapes(range) => {
+                        let (Some(vertices), Some(indices)) = (self.vertices.slice(), self.indices.slice()) else { continue };
                         pass.set_pipeline(&self.shape_pipeline);
-                        pass.set_vertex_buffer(0, vertices.slice(..));
-                        pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+                        pass.set_vertex_buffer(0, vertices);
+                        pass.set_index_buffer(indices, wgpu::IndexFormat::Uint32);
                         pass.draw_indexed(range.clone(), 0, 0..1);
                     }
-                    Command::Image { image, first } => {
+                    Command::Image { image, first } | Command::Live { viewer: image, first } => {
+                        let Some(quads) = self.quads.slice() else { continue };
+                        let picture = match command {
+                            Command::Image { .. } => &self.images[*image],
+                            _ => &self.live[image],
+                        };
                         pass.set_pipeline(&self.image_pipeline);
-                        pass.set_bind_group(1, &self.images[*image], &[]);
-                        pass.set_vertex_buffer(0, quads.slice(..));
-                        pass.draw(*first..*first + 6, 0..1);
-                    }
-                    Command::Live { viewer, first } => {
-                        pass.set_pipeline(&self.image_pipeline);
-                        pass.set_bind_group(1, &self.live[viewer], &[]);
-                        pass.set_vertex_buffer(0, quads.slice(..));
+                        pass.set_bind_group(1, picture, &[]);
+                        pass.set_vertex_buffer(0, quads);
                         pass.draw(*first..*first + 6, 0..1);
                     }
                 }

@@ -19,7 +19,7 @@ use crate::Viewer;
 use crate::camera::Camera;
 use crate::plots;
 use crate::render::Gpu;
-use crate::window::{self, Controls};
+use crate::window;
 
 /// How long the camera takes to move to a step's view.
 const CAMERA_MOVE: Duration = Duration::from_millis(900);
@@ -230,9 +230,9 @@ impl Lives {
             if state.playing {
                 if state.last_step.is_none_or(|t| t.elapsed() >= PLAY_INTERVAL) {
                     state.last_step = Some(Instant::now());
-                    let count = Controls::num_frames(&*v).max(1);
-                    let frame = (Controls::frame(&*v) + 1) % count;
-                    Controls::set_frame(&mut *v, frame);
+                    let count = v.num_frames().max(1);
+                    let frame = (v.frame + 1) % count;
+                    v.set_frame(frame);
                 }
                 moving = true;
             }
@@ -276,10 +276,10 @@ impl Lives {
             let help = self.help && focused == Some(live.viewer);
             // the plots go under the 3D view, which keeps the top
             let viewport = plots.then(|| [0.0, 0.0, pixels.0 as f32, ((1.0 - PLOTS_HEIGHT) * pixels.1 as f32).round()]);
-            v.draw_into_view(&target.view, FORMAT, pixels, viewport);
+            v.draw_into(&target.view, FORMAT, pixels, viewport);
             if plots || help {
-                let x = v.plots.x(v.frame, Controls::num_frames(&*v), v.scene.scrub_discrete);
-                let dark = Controls::theme(&*v) == "dark";
+                let x = v.plots.x(v.frame, v.num_frames(), v.scene.scrub_discrete);
+                let dark = v.theme() == "dark";
                 let overlay = self.overlay.get_or_insert_with(|| Overlay::new(&gpu.device));
                 again |= overlay.draw(gpu, &target.view, pixels, dark, |ui| {
                     if plots {
@@ -326,9 +326,9 @@ impl Lives {
             state.camera_move = None;
         }
         if pan {
-            Controls::pan(&mut *v, dx, dy, height);
+            v.pan(dx, dy, height);
         } else {
-            Controls::orbit(&mut *v, dx, dy);
+            v.orbit(dx, dy);
         }
         true
     }
@@ -351,7 +351,7 @@ impl Lives {
         if !right {
             let now = Instant::now();
             if self.last_click.is_some_and(|t| now - t < DOUBLE_CLICK) {
-                Controls::reset_camera(&mut *self.viewers[viewer].bind(py).borrow_mut());
+                self.viewers[viewer].bind(py).borrow_mut().reset_camera();
                 self.last_click = None;
                 return true;
             }
@@ -366,18 +366,18 @@ impl Lives {
         let Some((viewer, _)) = self.under(timeline, time, size, self.cursor) else { return false };
         let mut v = self.viewers[viewer].bind(py).borrow_mut();
         if zoom {
-            Controls::zoom(&mut *v, (-points * 0.004).exp());
+            v.zoom((-points * 0.004).exp());
             return true;
         }
         let state = self.states.entry(viewer).or_default();
-        let count = Controls::num_frames(&*v).max(1);
+        let count = v.num_frames().max(1);
         let gain = (count as f32 / 200.0).max(1.0).sqrt();
         state.scroll -= points / SCROLL_PER_FRAME * gain;
         let steps = state.scroll.trunc();
         state.scroll -= steps;
         if steps != 0.0 {
-            let frame = (Controls::frame(&*v) as i64 + steps as i64).clamp(0, count as i64 - 1);
-            Controls::set_frame(&mut *v, frame as usize);
+            let frame = (v.frame as i64 + steps as i64).clamp(0, count as i64 - 1);
+            v.set_frame(frame as usize);
         }
         true
     }
@@ -385,7 +385,7 @@ impl Lives {
     /// Pinching over a live view zooms. True when taken.
     pub fn pinch(&mut self, py: Python<'_>, timeline: &Timeline, time: f64, size: (u32, u32), delta: f64) -> bool {
         let Some((viewer, _)) = self.under(timeline, time, size, self.cursor) else { return false };
-        Controls::zoom(&mut *self.viewers[viewer].bind(py).borrow_mut(), 1.0 / (1.0 + delta as f32).max(0.1));
+        self.viewers[viewer].bind(py).borrow_mut().zoom(1.0 / (1.0 + delta as f32).max(0.1));
         true
     }
 
@@ -393,26 +393,26 @@ impl Lives {
     pub fn key(&mut self, py: Python<'_>, timeline: &Timeline, time: f64, key: &str, shift: bool) -> bool {
         let Some(viewer) = self.focused(timeline, time) else { return false };
         let mut v = self.viewers[viewer].bind(py).borrow_mut();
-        let count = Controls::num_frames(&*v).max(1);
+        let count = v.num_frames().max(1);
         let state = self.states.entry(viewer).or_default();
         let step = if shift { (count / 20).max(10) } else { 1 } as i64;
         match key {
             "," | "<" => {
-                let frame = (Controls::frame(&*v) as i64 - step).max(0);
-                Controls::set_frame(&mut *v, frame as usize);
+                let frame = (v.frame as i64 - step).max(0);
+                v.set_frame(frame as usize);
             }
             "." | ">" => {
-                let frame = (Controls::frame(&*v) as i64 + step).min(count as i64 - 1);
-                Controls::set_frame(&mut *v, frame as usize);
+                let frame = (v.frame as i64 + step).min(count as i64 - 1);
+                v.set_frame(frame as usize);
             }
             "p" => state.playing = !state.playing,
             "d" => window::toggle_discrete(&mut *v),
             "0" => {
                 state.camera_move = None;
-                Controls::reset_camera(&mut *v);
+                v.reset_camera();
             }
-            "+" | "=" => Controls::zoom(&mut *v, 1.0 / ZOOM_STEP),
-            "-" => Controls::zoom(&mut *v, ZOOM_STEP),
+            "+" | "=" => v.zoom(1.0 / ZOOM_STEP),
+            "-" => v.zoom(ZOOM_STEP),
             "l" => window::toggle_shading(&mut *v),
             "s" if shift => window::toggle_sidechains(&mut *v),
             "s" => window::toggle_style(&mut *v),

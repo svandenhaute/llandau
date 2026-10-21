@@ -24,8 +24,9 @@ pub fn buried(positions: &[Vec3], vdw: &[f32], atoms: &[usize]) -> Vec<f32> {
     }
     // the 5th percentile: what counts as exposed in this frame
     let mut sorted = filled.clone();
-    sorted.sort_unstable_by(f32::total_cmp);
-    let open = sorted[sorted.len() / 20].max(OPEN);
+    let k = sorted.len() / 20;
+    let (_, fifth, _) = sorted.select_nth_unstable_by(k, f32::total_cmp);
+    let open = fifth.max(OPEN);
     filled.iter().map(|f| ((f - open) / (BURIED - OPEN)).clamp(0.0, 1.0)).collect()
 }
 
@@ -60,7 +61,7 @@ fn filled(positions: &[Vec3], vdw: &[f32], atoms: &[usize]) -> Vec<f32> {
         let base = g.floor();
         let f = g - base;
         let base = base.as_uvec3();
-        (0..8).map(move |c| {
+        std::array::from_fn::<_, 8, _>(|c| {
             let (dx, dy, dz) = (c & 1, (c >> 1) & 1, (c >> 2) & 1);
             let w = [1.0 - f.x, f.x][dx] * [1.0 - f.y, f.y][dy] * [1.0 - f.z, f.z][dz];
             ([base.x as usize + dx, base.y as usize + dy, base.z as usize + dz], w)
@@ -97,7 +98,7 @@ fn filled(positions: &[Vec3], vdw: &[f32], atoms: &[usize]) -> Vec<f32> {
     atoms
         .iter()
         .map(|&a| {
-            let cells: Vec<_> = corners(positions[a]).collect();
+            let cells = corners(positions[a]);
             let around: f32 = cells.iter().map(|&([x, y, z], w)| w * grid[index(x, y, z)]).sum();
             // the atom's own volume, through the same spreading and blur
             let own: f32 = cells
