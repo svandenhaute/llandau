@@ -129,7 +129,10 @@ impl Slides {
     ///   show: a as it is; morph: a turns into b (same number of points);
     ///   create: a's curves drawn from the start; write: a's outline drawn,
     ///   then filled; image: placement a moves and fades into placement b.
-    #[pyo3(signature = (kind, a, b, z, start, end, window, rate = None, reverse = false))]
+    /// `layer`: the clip belongs to a fade: all clips of that layer are drawn
+    /// together into a transparent layer blended over the slide with the
+    /// progress as opacity (1 - progress with `fade_out`).
+    #[pyo3(signature = (kind, a, b, z, start, end, window, rate = None, reverse = false, layer = None, fade_out = false))]
     #[allow(clippy::too_many_arguments)]
     fn add_clip(
         &mut self,
@@ -142,6 +145,8 @@ impl Slides {
         window: (f64, f64),
         rate: Option<usize>,
         reverse: bool,
+        layer: Option<usize>,
+        fade_out: bool,
     ) -> PyResult<()> {
         let kind = match kind {
             "show" => Kind::Show,
@@ -160,7 +165,18 @@ impl Slides {
             Some(r) => r,
             None => usize::MAX,
         };
-        self.timeline.clips.push(Clip { kind, a, b, z, span: [start, end], window: [window.0, window.1], rate, reverse });
+        self.timeline.clips.push(Clip {
+            kind,
+            a,
+            b,
+            z,
+            span: [start, end],
+            window: [window.0, window.1],
+            rate,
+            reverse,
+            layer,
+            fade_out,
+        });
         Ok(())
     }
 

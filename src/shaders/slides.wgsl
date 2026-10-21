@@ -53,6 +53,14 @@ fn image_fs(in: ImageOut) -> @location(0) vec4<f32> {
     return vec4(c.rgb, c.a * in.opacity);
 }
 
+@fragment
+fn layer_fs(in: ImageOut) -> @location(0) vec4<f32> {
+    // a fade's layer, drawn over transparent black: its colors are premultiplied
+    let c = textureSample(image, image_sampler, in.uv);
+    let rgb = select(c.rgb / c.a, vec3(0.0), c.a <= 0.0);
+    return vec4(rgb, c.a * in.opacity);
+}
+
 struct BlitOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,

@@ -114,6 +114,12 @@ pub struct Clip {
     pub rate: usize,
     /// progress runs from 1 to 0 (Uncreate, Unwrite)
     pub reverse: bool,
+    /// a fade: the clips of one layer are drawn together into a transparent
+    /// layer that is blended over the slide with the fade's opacity, so they
+    /// cover each other as they will and blend with what is already there
+    pub layer: Option<usize>,
+    /// the layer's opacity runs from 1 to 0 (FadeOut)
+    pub fade_out: bool,
 }
 
 /// A rate function, sampled on [0, 1].
@@ -163,9 +169,10 @@ pub struct Timeline {
     pub frame: [f32; 2],
 }
 
-/// What to draw: shapes and images in drawing order.
+/// What to draw: shapes and images in drawing order. A shape in a layer
+/// (layer id, opacity) is drawn into that layer rather than onto the slide.
 pub enum Item<'a> {
-    Shape { shape: Cow<'a, Shape>, id: Option<usize> },
+    Shape { shape: Cow<'a, Shape>, id: Option<usize>, layer: Option<(usize, f32)> },
     Image(Placement),
     Live { viewer: usize, rect: [f32; 4] },
 }
@@ -186,7 +193,17 @@ impl Timeline {
         let mut active: Vec<&Clip> =
             self.clips.iter().filter(|c| c.span[0] <= time && time < c.span[1]).collect();
         active.sort_by(|a, b| a.z.total_cmp(&b.z));
-        let mut items: Vec<Item<'_>> = active.into_iter().filter_map(|clip| self.evaluate(clip, time)).collect();
+        let mut items: Vec<Item<'_>> = active
+            .into_iter()
+            .filter_map(|clip| {
+                let mut item = self.evaluate(clip, time)?;
+                if let (Some(layer), Item::Shape { layer: slot, .. }) = (clip.layer, &mut item) {
+                    let alpha = self.progress(clip, time);
+                    *slot = Some((layer, if clip.fade_out { 1.0 - alpha } else { alpha }));
+                }
+                Some(item)
+            })
+            .collect();
         items.extend(self.live_at(time).map(|i| Item::Live { viewer: self.lives[i].viewer, rect: self.lives[i].rect }));
         items
     }
@@ -206,30 +223,30 @@ impl Timeline {
     fn evaluate(&self, clip: &Clip, time: f64) -> Option<Item<'_>> {
         let alpha = self.progress(clip, time);
         let shape = |i: usize| self.shapes.get(i);
-        let item = |shape: Shape| Item::Shape { shape: Cow::Owned(shape), id: None };
+        let item = |shape: Shape| Item::Shape { shape: Cow::Owned(shape), id: None, layer: None };
+        let as_is = |id: usize| Some(Item::Shape { shape: Cow::Borrowed(shape(id)?), id: Some(id), layer: None });
         match clip.kind {
-            Kind::Show => Some(Item::Shape { shape: Cow::Borrowed(shape(clip.a)?), id: Some(clip.a) }),
+            Kind::Show => as_is(clip.a),
             Kind::Morph => {
-                let (a, b) = (shape(clip.a)?, shape(clip.b)?);
-                if alpha <= 0.0 {
-                    return Some(Item::Shape { shape: Cow::Borrowed(a), id: Some(clip.a) });
+                if alpha <= 0.0 || clip.a == clip.b {
+                    return as_is(clip.a);
                 }
                 if alpha >= 1.0 {
-                    return Some(Item::Shape { shape: Cow::Borrowed(b), id: Some(clip.b) });
+                    return as_is(clip.b);
                 }
-                Some(item(morph(a, b, alpha)))
+                Some(item(morph(shape(clip.a)?, shape(clip.b)?, alpha)))
             }
             Kind::Create => {
                 let a = shape(clip.a)?;
                 if alpha >= 1.0 {
-                    return Some(Item::Shape { shape: Cow::Borrowed(a), id: Some(clip.a) });
+                    return as_is(clip.a);
                 }
                 Some(item(Shape { points: partial(&a.points, 0.0, alpha), style: a.style }))
             }
             Kind::Write => {
                 let a = shape(clip.a)?;
                 if alpha >= 1.0 {
-                    return Some(Item::Shape { shape: Cow::Borrowed(a), id: Some(clip.a) });
+                    return as_is(clip.a);
                 }
                 let outline = outline_style(&a.style);
                 Some(item(if alpha < 0.5 {
@@ -360,6 +377,8 @@ mod tests {
             window: [1.0, 2.0],
             rate: 0,
             reverse: false,
+            layer: None,
+            fade_out: false,
         });
         assert!(timeline.at(0.5).is_empty());
         let y = |t| match &timeline.at(t)[0] {
@@ -385,6 +404,8 @@ mod tests {
             window: [0.0, 1.0],
             rate: usize::MAX, // linear
             reverse: false,
+            layer: None,
+            fade_out: false,
         });
         let style_at = |t| match &timeline.at(t)[0] {
             Item::Shape { shape, .. } => shape.style,
@@ -395,5 +416,33 @@ mod tests {
         assert_eq!(style_at(0.25).width, WRITE_OUTLINE);
         assert!((style_at(0.75).fill[3] - 0.5).abs() < 1e-6);
         assert_eq!(style_at(1.0), style);
+    }
+
+    #[test]
+    fn fades_carry_their_layers_opacity() {
+        let style = Style { fill: [1.0, 0.0, 0.0, 1.0], stroke: [0.0; 4], width: 0.0, join: Join::Miter, cap: Cap::Butt, stacked: false };
+        let mut timeline = Timeline::default();
+        timeline.shapes.push(Shape { points: line([0.0, 0.0], [1.0, 0.0]), style });
+        for (fade_out, start) in [(false, 0.0), (true, 2.0)] {
+            timeline.clips.push(Clip {
+                kind: Kind::Morph,
+                a: 0,
+                b: 0,
+                z: 0.0,
+                span: [start, start + 2.0],
+                window: [start, start + 1.0],
+                rate: usize::MAX,
+                reverse: false,
+                layer: Some(7),
+                fade_out,
+            });
+        }
+        let layer_at = |t| match &timeline.at(t)[0] {
+            Item::Shape { layer, id, .. } => (*layer, *id),
+            _ => unreachable!(),
+        };
+        assert_eq!(layer_at(0.5), (Some((7, 0.5)), Some(0))); // unchanged shape: still cached by id
+        assert_eq!(layer_at(1.5), (Some((7, 1.0)), Some(0)));
+        assert_eq!(layer_at(2.25), (Some((7, 0.75)), Some(0)));
     }
 }

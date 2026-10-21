@@ -1,6 +1,9 @@
 //! Drawing a timeline at one moment: paths tessellated into triangles (lyon),
 //! images as textured quads, all into a supersampled, multisampled target
 //! that is then averaged down into the window or an offscreen texture.
+//! A fade's shapes are drawn into a transparent layer of the same size, which
+//! is then blended over the slide with the fade's opacity: they cover each
+//! other as they will at the end, and blend with whatever is already there.
 
 use std::collections::HashMap;
 
@@ -63,6 +66,8 @@ enum Command {
     Shapes(std::ops::Range<u32>),
     Image { image: usize, first: u32 },
     Live { viewer: usize, first: u32 },
+    /// shapes drawn into the layer, then the layer blended over the slide as quad `first`
+    Layer { shapes: std::ops::Range<u32>, first: u32 },
 }
 
 struct Targets {
@@ -70,11 +75,20 @@ struct Targets {
     msaa: wgpu::TextureView,
     resolved: wgpu::TextureView,
     blit_group: wgpu::BindGroup,
+    /// the fade layer (made when a fade is first drawn)
+    layer: Option<LayerTargets>,
+}
+
+struct LayerTargets {
+    msaa: wgpu::TextureView,
+    resolved: wgpu::TextureView,
+    group: wgpu::BindGroup,
 }
 
 pub struct Painter {
     shape_pipeline: wgpu::RenderPipeline,
     image_pipeline: wgpu::RenderPipeline,
+    layer_pipeline: wgpu::RenderPipeline,
     blit_pipelines: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
     blit_layout: wgpu::PipelineLayout,
     shader: wgpu::ShaderModule,
@@ -168,7 +182,7 @@ impl Painter {
             attribute(1, 8, wgpu::VertexFormat::Float32x2),
             attribute(2, 16, wgpu::VertexFormat::Float32),
         ];
-        let pipeline = |label, layout: &wgpu::PipelineLayout, entry: &str, stride: usize, attributes: &[wgpu::VertexAttribute]| {
+        let pipeline = |label, layout: &wgpu::PipelineLayout, entry: &str, fragment: &str, stride: usize, attributes: &[wgpu::VertexAttribute]| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(layout),
@@ -187,7 +201,7 @@ impl Painter {
                 multisample: wgpu::MultisampleState { count: SAMPLES, mask: !0, alpha_to_coverage_enabled: false },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
-                    entry_point: Some(&format!("{entry}_fs")),
+                    entry_point: Some(&format!("{fragment}_fs")),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: FORMAT,
@@ -200,9 +214,11 @@ impl Painter {
             })
         };
         let shape_pipeline =
-            pipeline("shapes", &shape_layout, "shape", std::mem::size_of::<ShapeVertex>(), &shape_attributes);
+            pipeline("shapes", &shape_layout, "shape", "shape", std::mem::size_of::<ShapeVertex>(), &shape_attributes);
         let image_pipeline =
-            pipeline("images", &textured_layout, "image", std::mem::size_of::<ImageVertex>(), &image_attributes);
+            pipeline("images", &textured_layout, "image", "image", std::mem::size_of::<ImageVertex>(), &image_attributes);
+        let layer_pipeline =
+            pipeline("layers", &textured_layout, "image", "layer", std::mem::size_of::<ImageVertex>(), &image_attributes);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("linear"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -213,6 +229,7 @@ impl Painter {
         Painter {
             shape_pipeline,
             image_pipeline,
+            layer_pipeline,
             blit_pipelines: HashMap::new(),
             blit_layout: textured_layout,
             shader,
@@ -276,11 +293,9 @@ impl Painter {
         self.live.insert(viewer, group);
     }
 
-    fn ensure_targets(&mut self, device: &wgpu::Device, size: (u32, u32)) {
-        if matches!(&self.targets, Some(t) if t.size == size) {
-            return;
-        }
-        let texture = |label, samples, usage| {
+    /// A multisampled target and its resolved copy (readable as a texture), with a bind group for it.
+    fn make_targets(&self, device: &wgpu::Device, size: (u32, u32), label: &str) -> (wgpu::TextureView, wgpu::TextureView, wgpu::BindGroup) {
+        let texture = |label: &str, samples, usage| {
             device
                 .create_texture(&wgpu::TextureDescriptor {
                     label: Some(label),
@@ -294,21 +309,32 @@ impl Painter {
                 })
                 .create_view(&Default::default())
         };
-        let msaa = texture("slides msaa", SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT);
+        let msaa = texture(&format!("{label} msaa"), SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT);
         let resolved = texture(
-            "slides resolved",
+            &format!("{label} resolved"),
             1,
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         );
-        let blit_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("blit"),
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
             layout: &self.texture_layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&resolved) },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
             ],
         });
-        self.targets = Some(Targets { size, msaa, resolved, blit_group });
+        (msaa, resolved, group)
+    }
+
+    fn ensure_targets(&mut self, device: &wgpu::Device, size: (u32, u32), layer: bool) {
+        if !matches!(&self.targets, Some(t) if t.size == size) {
+            let (msaa, resolved, blit_group) = self.make_targets(device, size, "slides");
+            self.targets = Some(Targets { size, msaa, resolved, blit_group, layer: None });
+        }
+        if layer && self.targets.as_ref().unwrap().layer.is_none() {
+            let (msaa, resolved, group) = self.make_targets(device, size, "layer");
+            self.targets.as_mut().unwrap().layer = Some(LayerTargets { msaa, resolved, group });
+        }
     }
 
     fn blit_pipeline(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) -> &wgpu::RenderPipeline {
@@ -358,9 +384,9 @@ impl Painter {
             ((viewport[2] as u32) * SUPERSAMPLE).clamp(1, max),
             ((viewport[3] as u32) * SUPERSAMPLE).clamp(1, max),
         );
-        self.ensure_targets(device, inner);
+        self.ensure_targets(device, inner, false);
 
-        // tessellate, in drawing order
+        // tessellate, in drawing order; a fade's shapes (same layer and opacity) form a run
         let tolerance = TOLERANCE * timeline.frame[0] / inner.0 as f32;
         if (tolerance - self.cache_tolerance).abs() > 0.25 * self.cache_tolerance {
             self.cache.clear();
@@ -371,10 +397,26 @@ impl Painter {
         let mut image_vertices: Vec<ImageVertex> = Vec::new();
         let mut commands: Vec<Command> = Vec::new();
         let mut used = std::collections::HashSet::new();
+        // the open layer run: (layer, opacity, first index)
+        let mut open: Option<(usize, f32, u32)> = None;
+        let whole = [0.0, 0.0, timeline.frame[0], timeline.frame[1]];
+        let close = |open: &mut Option<(usize, f32, u32)>, end: u32, quads: &mut Vec<ImageVertex>, commands: &mut Vec<Command>| {
+            if let Some((_, opacity, start)) = open.take() {
+                let first = quad(quads, whole, opacity);
+                commands.push(Command::Layer { shapes: start..end, first });
+            }
+        };
         for item in timeline.at(time) {
+            let here = mesh.indices.len() as u32;
+            let layer = match &item {
+                Item::Shape { layer, .. } => *layer,
+                _ => None,
+            };
+            if !matches!((open, layer), (Some((o, p, _)), Some((l, q))) if o == l && p == q) {
+                close(&mut open, here, &mut image_vertices, &mut commands);
+            }
             match item {
-                Item::Shape { shape, id } => {
-                    let start = mesh.indices.len() as u32;
+                Item::Shape { shape, id, layer } => {
                     match id {
                         Some(id) => {
                             used.insert(id);
@@ -384,9 +426,16 @@ impl Painter {
                         None => append(&mut mesh, &tessellate(&shape, tolerance)),
                     }
                     let end = mesh.indices.len() as u32;
-                    match commands.last_mut() {
-                        Some(Command::Shapes(range)) if range.end == start => range.end = end,
-                        _ => commands.push(Command::Shapes(start..end)),
+                    match layer {
+                        Some((l, opacity)) => {
+                            if open.is_none() {
+                                open = Some((l, opacity, here));
+                            }
+                        }
+                        None => match commands.last_mut() {
+                            Some(Command::Shapes(range)) if range.end == here => range.end = end,
+                            _ => commands.push(Command::Shapes(here..end)),
+                        },
                     }
                 }
                 Item::Image(placement) => {
@@ -404,7 +453,11 @@ impl Painter {
                 }
             }
         }
+        close(&mut open, mesh.indices.len() as u32, &mut image_vertices, &mut commands);
         self.cache.retain(|id, _| used.contains(id));
+        if commands.iter().any(|c| matches!(c, Command::Layer { .. })) {
+            self.ensure_targets(device, inner, true);
+        }
 
         let frame = FrameUniform { scale: [2.0 / timeline.frame[0], 2.0 / timeline.frame[1]], srgb: 0.0, _pad: 0.0 };
         queue.write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&frame));
@@ -418,14 +471,14 @@ impl Painter {
         let targets = self.targets.as_ref().unwrap();
         let [r, g, b, a] = timeline.background.map(f64::from);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("slides") });
-        {
+        let begin = |encoder: &mut wgpu::CommandEncoder, label, msaa, resolved, load| {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("slide"),
+                label: Some(label),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &targets.msaa,
+                    view: msaa,
                     depth_slice: None,
-                    resolve_target: Some(&targets.resolved),
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a }), store: wgpu::StoreOp::Discard },
+                    resolve_target: Some(resolved),
+                    ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
@@ -433,28 +486,44 @@ impl Painter {
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &self.frame_group, &[]);
+            pass.forget_lifetime()
+        };
+        let shapes = |pass: &mut wgpu::RenderPass<'_>, range: &std::ops::Range<u32>| {
+            let (Some(vertices), Some(indices)) = (self.vertices.slice(), self.indices.slice()) else { return };
+            pass.set_pipeline(&self.shape_pipeline);
+            pass.set_vertex_buffer(0, vertices);
+            pass.set_index_buffer(indices, wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(range.clone(), 0, 0..1);
+        };
+        let picture = |pass: &mut wgpu::RenderPass<'_>, pipeline: &wgpu::RenderPipeline, group: &wgpu::BindGroup, first: u32| {
+            let Some(quads) = self.quads.slice() else { return };
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(1, group, &[]);
+            pass.set_vertex_buffer(0, quads);
+            pass.draw(first..first + 6, 0..1);
+        };
+        {
+            let slide = |encoder: &mut wgpu::CommandEncoder, load| begin(encoder, "slide", &targets.msaa, &targets.resolved, load);
+            let mut pass = slide(&mut encoder, wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a }));
             for command in &commands {
                 match command {
-                    Command::Shapes(range) => {
-                        let (Some(vertices), Some(indices)) = (self.vertices.slice(), self.indices.slice()) else { continue };
-                        pass.set_pipeline(&self.shape_pipeline);
-                        pass.set_vertex_buffer(0, vertices);
-                        pass.set_index_buffer(indices, wgpu::IndexFormat::Uint32);
-                        pass.draw_indexed(range.clone(), 0, 0..1);
-                    }
-                    Command::Image { image, first } | Command::Live { viewer: image, first } => {
-                        let Some(quads) = self.quads.slice() else { continue };
-                        let picture = match command {
-                            Command::Image { .. } => &self.images[*image],
-                            _ => &self.live[image],
-                        };
-                        pass.set_pipeline(&self.image_pipeline);
-                        pass.set_bind_group(1, picture, &[]);
-                        pass.set_vertex_buffer(0, quads);
-                        pass.draw(*first..*first + 6, 0..1);
+                    Command::Shapes(range) => shapes(&mut pass, range),
+                    Command::Image { image, first } => picture(&mut pass, &self.image_pipeline, &self.images[*image], *first),
+                    Command::Live { viewer, first } => picture(&mut pass, &self.image_pipeline, &self.live[viewer], *first),
+                    Command::Layer { shapes: range, first } => {
+                        // the layer's shapes over transparent black, then the layer over the slide
+                        drop(pass);
+                        let layer = targets.layer.as_ref().unwrap();
+                        let mut layer_pass =
+                            begin(&mut encoder, "layer", &layer.msaa, &layer.resolved, wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT));
+                        shapes(&mut layer_pass, range);
+                        drop(layer_pass);
+                        pass = slide(&mut encoder, wgpu::LoadOp::Load);
+                        picture(&mut pass, &self.layer_pipeline, &layer.group, *first);
                     }
                 }
             }
+            drop(pass);
         }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

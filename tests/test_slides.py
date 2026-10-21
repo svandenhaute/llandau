@@ -51,7 +51,7 @@ def test_deck_steps_and_text():
     first, second = (deck.render(t - 1e-6, 320, 180) for t, _, _ in deck.marks)
     assert ink(second) > ink(first) > 0
     # halfway through Write the text is partly there
-    middle = deck.render(deck.marks[0][0] + 0.2, 320, 180)
+    middle = deck.render(deck.marks[0][0] + 0.1, 320, 180)  # reveal: run_time 0.2
     assert ink(first) < ink(middle) < ink(second)
 
 
@@ -227,7 +227,7 @@ def test_vector_layers_drop_off_page(tmp_path):
 
 
 def test_fade_keeps_covering():
-    """A fading opaque shape hides what lies beneath it at every moment: colours fade, not opacity."""
+    """A fading group is blended as one layer: an opaque shape hides what lies beneath it within the group."""
     class Cover(Scene):
         def construct(self):
             self.camera.background_color = "#FFFFFF"
@@ -241,3 +241,19 @@ def test_fade_keeps_covering():
         image = deck.render(time, 320, 180)
         assert image[90, 160, :3].min() > 250, f"the white square let the dark one through at t={time}"
     assert ink(deck.render(0.5, 320, 180)) > 0  # the dark square is on its way in
+
+
+def test_fade_blends_with_prior_content():
+    """A fade starts from what is already on the slide, not from the background."""
+    class Over(Scene):
+        def construct(self):
+            self.camera.background_color = "#FFFFFF"
+            self.add(Square(color=BLACK, fill_opacity=1, stroke_width=0))
+            light = Square(color="#FFFFFF", fill_opacity=1, stroke_width=0).scale(0.5)
+            self.play(FadeIn(light), run_time=1)
+            self.play(FadeOut(light), run_time=1)
+
+    deck = build([Over])
+    center = lambda t: int(deck.render(t, 320, 180)[90, 160, :3].mean())  # noqa: E731
+    assert center(0.0) < 10 and center(1.0) > 245 and center(2.0) < 10
+    assert 80 < center(0.5) < 180 and 80 < center(1.5) < 180, (center(0.5), center(1.5))

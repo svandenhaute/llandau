@@ -118,6 +118,7 @@ class _Builder:
         self.open: dict[int, tuple] = {}
         self.claimed: set[int] = set()
         self.play_span = (0.0, 0.0)
+        self.layers = 0  # fade layers handed out
         self.scene = None  # the scene running now (build)
         # live views: one viewer per (scene, theme); spans waiting for their step's end
         self.viewers = {}
@@ -267,7 +268,13 @@ class _Builder:
         samples = [float(rate(1 - clock(t) if reverse else clock(t))) for t in times]
         return (start, end), self.slides.add_rate(samples), False
 
-    def morph(self, a, b, z, clock, rate, reverse=False):
+    def new_layer(self) -> int:
+        """A fresh fade layer id: the clips given it are blended over the slide as one."""
+        self.layers += 1
+        return self.layers
+
+    def morph(self, a, b, z, clock, rate, reverse=False, layer=None):
+        """a turns into b; layer (layer id, fades out): the shape fades as part of that layer."""
         start, end = self.play_span
         window, rate_id, reverse = self._timing(clock, rate, reverse)
         if isinstance(a, ImageMobject) and isinstance(b, ImageMobject):
@@ -276,7 +283,8 @@ class _Builder:
         if isinstance(a, VMobject) and isinstance(b, VMobject):
             ga, gb = self.shape(a), self.shape(b)
             if ga is not None and gb is not None:
-                self.slides.add_clip("morph", ga, gb, z, start, end, window, rate_id, reverse)
+                layer_id, fade_out = layer if layer is not None else (None, False)
+                self.slides.add_clip("morph", ga, gb, z, start, end, window, rate_id, reverse, layer_id, fade_out)
             return
         # a raster image and a vector shape: switch halfway
         mid = (window[0] + window[1]) / 2

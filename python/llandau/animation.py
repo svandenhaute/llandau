@@ -14,7 +14,7 @@ import sys
 import numpy as np
 
 from .mobject import (
-    ORIGIN, PI, TAU, YELLOW, Color, Group, ImageMobject, Mobject, VMobject, OUT,
+    ORIGIN, PI, TAU, YELLOW, Group, ImageMobject, Mobject, VMobject, OUT,
 )
 
 __all__ = [
@@ -383,6 +383,9 @@ class Transform(Animation):
     """The mobject turns into target_mobject: points and styles are aligned
     (manim's align_data, at the level of drawn parts) and interpolated."""
 
+    # (layer id, fades out): set by a fade, whose clips are drawn as one layer (see _Fade)
+    layer = None
+
     def __init__(self, mobject, target_mobject=None, path_arc: float = 0, path_arc_axis=OUT,
                  replace_mobject_with_target_in_scene: bool = False, **kwargs):
         self.path_arc = path_arc
@@ -428,7 +431,7 @@ class Transform(Animation):
         z = ctx.z_of(self.mobject)
         ctx.claim(self.mobject)
         for i, ((a, b), c) in enumerate(zip(pairs, clocks)):
-            ctx.morph(a, b, z(i, len(pairs)), c, self.rate_func, self.reverse_rate_function)
+            ctx.morph(a, b, z(i, len(pairs)), c, self.rate_func, self.reverse_rate_function, layer=self.layer)
         self._aligned_start, self.target_copy = start, end
         return True
 
@@ -550,24 +553,14 @@ class _FromStart(Transform):
             super().finish_native(scene)
 
 
-def _faded(mobject, background):
-    """A copy of mobject as it looks when faded away: drawn parts in the background colour with
-    their opacities kept, so an opaque shape covers what lies beneath it at every moment of the
-    fade (fading the opacity instead lets the parts show through each other); images at opacity 0."""
-    out = mobject.copy()
-    for m in out.get_family():
-        if isinstance(m, VMobject):
-            m.fill_color = Color(background)
-            m.stroke_color = Color(background)
-        elif m is not out:
-            m.fade(1, family=False)
-    return out
-
-
 class _Fade(_FromStart):
+    """Drawn natively, a fade blends the whole group as one layer: its parts cover each other as
+    they will at the end, and the layer blends with whatever is already on the slide. (Baked, the
+    parts' opacities are interpolated instead, which lets them show through each other.)"""
+
     def __init__(self, *mobjects, shift=None, target_position=None, scale: float = 1, **kwargs):
         self._mobjects = mobjects
-        self._background = None  # the scene's, once known
+        self._native = False  # compiling: the invisible end keeps its colours, the layer fades
         mobject = mobjects[0] if len(mobjects) == 1 else Group(*mobjects)
         if shift is not None:
             self.shift_vector = np.asarray(shift, dtype=float)
@@ -581,19 +574,29 @@ class _Fade(_FromStart):
         self.scale_factor = scale
         super().__init__(mobject, **kwargs)
 
-    def _setup_scene(self, scene):
-        self._background = scene.camera.background_color
+    def away(self):
+        """The invisible end of the fade: a copy shifted and scaled away; faded out part by part
+        when baked, as it is when native (images always fade: their clips carry an opacity)."""
+        out = self.mobject.copy()
+        for m in out.get_family():
+            if isinstance(m, ImageMobject) or not self._native:
+                m.fade(1, family=False)
+        return out
 
-    def faded(self):
-        from . import theme
-        return _faded(self.mobject, self._background if self._background is not None else theme.current().bg)
+    def compile(self, ctx, clock):
+        self.layer = (ctx.new_layer(), self.remover)
+        self._native = True
+        try:
+            return super().compile(ctx, clock)
+        finally:
+            self._native = False
 
 
 class FadeIn(_Fade):
     introducer = True
 
     def start_state(self):
-        start = self.faded()
+        start = self.away()
         start.shift(-self.shift_vector if not self._point_target else self.shift_vector)
         return start.scale(self.scale_factor)
 
@@ -601,7 +604,6 @@ class FadeIn(_Fade):
         return self.mobject  # fades in to what it is
 
     def _setup_scene(self, scene):
-        super()._setup_scene(scene)
         scene.add(*self._mobjects)
 
 
@@ -613,7 +615,7 @@ class FadeOut(_Fade):
         return self.mobject  # fades out from what it is
 
     def end_state(self):
-        return self.faded().shift(self.shift_vector).scale(self.scale_factor)
+        return self.away().shift(self.shift_vector).scale(self.scale_factor)
 
     def clean_up_from_scene(self, scene):
         scene.remove(*self._mobjects)
