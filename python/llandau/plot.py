@@ -502,15 +502,18 @@ class Plot(VGroup):
         minor = np.zeros(0)
         if given is not None:
             major = np.asarray(given, dtype=float)
+            if names is not None and len(names) != len(major):
+                raise ValueError(f"{len(names)} tick labels for {len(major)} ticks")
         elif log:
             major, minor = log_ticks(min(lo, hi), max(lo, hi))
         else:
             # matplotlib's tick space: the axis length over 3 (x) or 2 (y) label heights
             major = nice_ticks(min(lo, hi), max(lo, hi), max(3, min(9, int(length / ((3 if dim == 0 else 2) * font)))))
-        major = major[(major >= min(lo, hi) - 1e-9 * abs(hi - lo)) & (major <= max(lo, hi) + 1e-9 * abs(hi - lo))]
+        shown = (major >= min(lo, hi) - 1e-9 * abs(hi - lo)) & (major <= max(lo, hi) + 1e-9 * abs(hi - lo))
+        major = major[shown]
         power = 0
         if names is not None:
-            labels = list(names)
+            labels = [name for name, keep in zip(names, shown) if keep]  # with their ticks
         elif log:
             labels = [f"$10^({int(round(math.log10(v)))})$".replace("^(-", "^(−") for v in major]
         else:

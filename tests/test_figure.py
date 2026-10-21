@@ -86,3 +86,28 @@ def test_subplots_grid():
     assert axes.shape == (2, 3)
     fig, axes = subplots(1, 3, figsize=(6.0, 2.0))
     assert axes.shape == (3,)
+
+
+def test_svg_strokes_scale_with_stretching(tmp_path):
+    from llandau.mobject import SVGMobject
+    path = tmp_path / "ring.svg"
+    path.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="600" height="300">'
+                    '<circle cx="300" cy="150" r="120" fill="none" stroke="#000" stroke-width="3"/></svg>')
+    scaled = SVGMobject(path, height=None).scale_to_fit_width(2.0)
+    stretched = SVGMobject(path, height=None).stretch_to_fit_width(2.0)
+    stretched.stretch_to_fit_height(2.0)  # the same size as scaled, in two steps
+    assert stretched.submobjects[0].stroke_width == pytest.approx(scaled.submobjects[0].stroke_width)
+    assert scaled.submobjects[0].stroke_width == pytest.approx(100 * 3 * 2.0 / 240, rel=1e-3)
+
+
+def test_tick_labels_stay_with_their_ticks():
+    fig, ax = subplots(figsize=(3.0, 2.0))
+    ax.plot([2, 50], [1, 2])
+    ax.set_xscale("log")
+    ax.set_xticks([1, 10, 100], ["one", "ten", "hundred"])  # 1 and 100 are beyond the data
+    ax._ensure()
+    ticks, _, labels, _ = ax._ticks(0, *ax.limits[0], 1.0, 0.1)
+    assert list(ticks) == [10] and labels == ["ten"]
+    ax.set_xticks([1, 10], ["one"])
+    with pytest.raises(ValueError):
+        ax._ensure()

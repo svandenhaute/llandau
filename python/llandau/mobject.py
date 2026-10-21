@@ -320,9 +320,15 @@ class Mobject:
                     m.stroke_width *= abs(factor)
         return self.apply_points_function(lambda p: p * factor, about_point=about_point)
 
-    def stretch(self, factor: float, dim: int, about_point=None, about_edge=ORIGIN):
+    def stretch(self, factor: float, dim: int, about_point=None, about_edge=ORIGIN, scale_stroke: bool = False):
         if about_point is None:
             about_point = self.get_critical_point(about_edge)
+        # strokes of SVG paths scale with the drawing: by the geometric mean of the
+        # factors along x and y (as SVG transforms scale them)
+        for m in self.get_family():
+            if scale_stroke or getattr(m, "stroke_scales", False):
+                if hasattr(m, "stroke_width"):
+                    m.stroke_width *= math.sqrt(abs(factor))
 
         def function(points):
             points = points.copy()
