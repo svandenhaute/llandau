@@ -123,6 +123,7 @@ See `examples/paper_figures.py`.
 @live_scene("butane")
 def butane(viewer):                          # a llandau.Viewer, in the deck's theme
     viewer.load(positions, numbers)          # (frames, atoms, 3), (atoms,)
+    viewer.set_plots({"energy": energy})     # large under the view on G, or with plots=True
 
 class Results(Deck):
     def construct(self):
@@ -132,9 +133,11 @@ class Results(Deck):
         self.reveal(...)
 ```
 
-Over a live view: drag rotates, right drag pans, the wheel scrubs frames, pinch zooms; `,` `.`
-step frames, `P` plays, `D` toggles the discrete states, `0` resets the camera. Exports show a
-still image of each live view. See `llandau.live` for the view settings.
+Over a live view: drag rotates, right drag pans, the wheel scrubs frames, pinch zooms; `?`
+shows its keys: `P` plays, `,` `.` step frames, `D` discrete states, `+` `-` zoom, `0` resets
+the camera, `L` lit / flat, `S` atoms / protein (shift: side chains), `C` next coloring, `1`–`9`
+layers, `G` shows the viewer's plots large under the view, with axes readable on a projector.
+Exports show a still image of each live view's 3D view. See `llandau.live` for the view settings.
 
 Layer conventions for `show_svg`: steps are ordered by the first number in each Inkscape layer
 label (layers sharing a number appear together), saved visibility is ignored, and layers whose
@@ -169,9 +172,10 @@ The protein style draws a smooth tube through the CAs and the side chains, no hy
 trails follow the CAs only. Themes ("light", "dark") set the background and every
 non-element color; element colors come from `llandau.elements`.
 
-`explore(viewer, plots=..., t=...)` opens a native window (winit + egui) with the 3D view, a
-panel of controls and plots; it works on macOS, X11 and Wayland. Keys: space plays, `,` `.`
-step frames, `D` toggles the discrete states, `0` resets the camera, `R` records, Escape closes.
+`explore(viewer, plots=..., t=...)` (or `viewer.set_plots`, then `explore(viewer)`) opens a
+native window (winit + egui) with the 3D view, a panel of controls and plots; it works on macOS,
+X11 and Wayland. Every control has a key, hinted dimly beside it; `?` shows them all. To present:
+`F` full screen, `H` hides the panel, `G` shows the plots large under the view. `R` records.
 Recording keeps what you do in the 3D view; stopping renders it offscreen into an MP4 (H.264)
 at a fixed frame rate, without the panel: `explore(viewer, record="turn.mp4",
 record_size=(1920, 1080), record_fps=60)`, or any frames with `llandau.video.Video`. Without a

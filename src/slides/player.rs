@@ -4,7 +4,7 @@
 //! ← PageUp ↑ go back one step, Home and End go to the first and last step,
 //! R replays the step, F toggles full screen, Escape leaves full screen or
 //! closes, Q closes. Scrolling scrubs through time, faster when scrolling fast.
-//! Over a live 3D view, the mouse and some keys go to it (see `live`).
+//! Over a live 3D view, the mouse and some keys go to it (see `live`; ? shows them).
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -208,7 +208,7 @@ impl App<'_> {
         let live_moving = self.lives.animate(self.py);
         let Some(target) = self.surface.as_mut() else { return };
         let size = (target.config.width, target.config.height);
-        self.lives.draw(self.py, self.gpu, self.painter, self.timeline, self.time, size);
+        let overlay_settling = self.lives.draw(self.py, self.gpu, self.painter, self.timeline, self.time, size);
         if let Some(path) = self.options.screenshot.take() {
             let offscreen = Offscreen::with_format(&self.gpu.device, size, target.config.format);
             self.painter.draw(
@@ -250,7 +250,7 @@ impl App<'_> {
             size,
         );
         self.gpu.queue.present(texture);
-        if self.playing.is_some() || live_moving {
+        if self.playing.is_some() || live_moving || overlay_settling {
             target.window.request_redraw();
         }
     }

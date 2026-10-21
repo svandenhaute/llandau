@@ -120,3 +120,17 @@ def test_slides_timeline():
     # halfway through filling in: half as dark
     assert ink(middle) == pytest.approx(ink(end) / 2, rel=0.1)
     assert ink(end) == pytest.approx(36 / 144, abs=0.02)  # 6 x 6 of the 16 x 9 frame
+
+
+def test_plots_belong_to_the_viewer(viewer):
+    from llandau.live import apply_view, check
+    viewer.set_plots({"energy": np.arange(5.0)})  # values per path frame
+    viewer.set_plots({"energy": (np.linspace(0, 1, 9), np.zeros(9))}, t=np.linspace(0, 1, 5))
+    with pytest.raises(ValueError):
+        viewer.set_plots({"energy": (np.arange(3.0), np.arange(4.0))})
+    assert not viewer.show_plots
+    check({"plots": True})
+    apply_view(viewer, {"plots": True})
+    assert viewer.show_plots
+    viewer.reset()
+    assert not viewer.show_plots

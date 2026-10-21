@@ -85,9 +85,32 @@ class Viewer(_Viewer):
     def set_ghost(self, positions, opacity=0.35, fade=0.6):
         super().set_ghost(_f32(positions), opacity, fade)
 
+    def set_plots(self, plots: dict, t=None):
+        """Scalars to plot along the trajectory, with a cursor at the current frame: name ->
+        values per path frame, or name -> (xs, values) on the scale of `t`, the parameter of
+        each path frame (default: the frame index). The explorer shows them (G: large); a
+        deck's live view shows them large on G, or with plots=True."""
+        frames = max(self.num_path_frames, 1)
+        t = np.arange(frames, dtype=np.float64) if t is None else np.asarray(t, dtype=np.float64)
+        super().set_plots([_curve(name, values, t) for name, values in plots.items()], t.tolist())
+
     def color_by(self, name, values, cmap="viridis", normalize=True):
         """Add a coloring from per-atom scalars (atoms,) or (frames, atoms), normalized over all frames."""
         self.add_coloring(name, colormaps.apply(values, cmap, normalize))
+
+
+def _curve(name, values, t):
+    """(name, xs, values): values per frame, or (xs, values) on the scale of t."""
+    if isinstance(values, tuple):
+        xs, values = values
+    else:
+        values = np.asarray(values, dtype=np.float64)
+        xs = t[: len(values)] if len(values) <= len(t) else np.arange(len(values))
+    xs = np.asarray(xs, dtype=np.float64)
+    values = np.asarray(values, dtype=np.float64)
+    if len(xs) != len(values):
+        raise ValueError(f"plot {name!r}: {len(xs)} x values for {len(values)} values")
+    return name, xs.tolist(), values.tolist()
 
 
 def segment_ids(t, boundaries):

@@ -9,10 +9,18 @@
 
 Mouse: drag rotates, right drag (or shift + drag) pans, the wheel scrubs frames
 (faster when scrolling fast and for long trajectories; shift: frame by frame),
-ctrl + wheel or a pinch zooms, a double click resets the camera. Keys: space plays,
-, and . step frames (shift: 5% of them), Home and End go to the first and last
-frame, D toggles the discrete states, 0 resets the camera, R starts and stops
-recording, Escape closes. No Qt needed: the window is part of llandau (winit + egui).
+ctrl + wheel or a pinch zooms, a double click resets the camera. Every control
+has a key, hinted beside it in the panel; ? shows them all:
+
+    Space P  play          ← → , .  frames (shift: 5%)   Home End  first, last frame
+    D  discrete states     + −  zoom      0  reset the camera
+    T  light / dark        L  lit / flat  S  atoms / protein (shift: side chains)
+    C  next coloring       1-9  layers    ⌘C / ctrl C  copy the camera
+    G  large plots         H  hide the panel    F  full screen    R  record
+    Esc  close the keys, leave full screen, close
+
+To present: F, H, and G to show the plots large under the view with readable
+axes. No Qt needed: the window is part of llandau (winit + egui).
 
 Record (or R) keeps what you do in the view; Stop renders it offscreen into an
 MP4 at a fixed frame rate, without the panel (needs ffmpeg: pip install
@@ -24,23 +32,8 @@ import itertools
 import time
 from pathlib import Path
 
-import numpy as np
 
 __all__ = ["explore"]
-
-
-def _curve(name, values, t):
-    """(name, xs, values): values per frame, or (xs, values) on the scale of t."""
-    if isinstance(values, tuple):
-        xs, values = values
-    else:
-        values = np.asarray(values, dtype=np.float64)
-        xs = t[: len(values)] if len(values) <= len(t) else np.arange(len(values))
-    xs = np.asarray(xs, dtype=np.float64)
-    values = np.asarray(values, dtype=np.float64)
-    if len(xs) != len(values):
-        raise ValueError(f"plot {name!r}: {len(xs)} x values for {len(values)} values")
-    return name, xs.tolist(), values.tolist()
 
 
 def _recorder(path, fps):
@@ -68,6 +61,7 @@ def explore(viewer, plots: dict | None = None, t=None, info: str | None = None,
     """Show the viewer in a window until it closes.
 
     plots       name -> values per frame, or name -> (xs, values) on the scale of `t`
+                (as viewer.set_plots; default: the viewer's)
     t           the parameter of each path frame (default: the frame index)
     info        a line of text above the controls
     buttons     label -> function of the camera dict returning text to copy (and print)
@@ -75,12 +69,9 @@ def explore(viewer, plots: dict | None = None, t=None, info: str | None = None,
     record      the record button's video file (default: llandau-<date>-<time>.mp4)
     record_size its size in pixels (default: the 3D view's), record_fps its frame rate
     """
-    frames = max(viewer.num_path_frames, 1)
-    t = np.arange(frames, dtype=np.float64) if t is None else np.asarray(t, dtype=np.float64)
-    curves = [_curve(name, values, t) for name, values in (plots or {}).items()]
+    if plots is not None or t is not None:
+        viewer.set_plots(plots or {}, t)
     viewer.explore(
-        plots=curves,
-        t=t.tolist(),
         info=info,
         buttons=list((buttons or {}).items()),
         title=title,

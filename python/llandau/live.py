@@ -4,6 +4,7 @@
     def butane(viewer):                     # a llandau.Viewer, in the deck's theme
         viewer.load(positions, numbers)     # (frames, atoms, 3), (atoms,)
         viewer.add_vectors("tangent", tangents, visible=False)
+        viewer.set_plots({"energy": energy})  # under the view on G, or with plots=True
 
     class Results(Deck):
         def construct(self):
@@ -16,22 +17,25 @@
 
 A view (the keywords of Deck.live) sets, when its step starts: camera (a dict as
 viewer.camera; the camera moves there smoothly), frame, style, sidechains,
-shading, fog, occlusion, coloring, scrub_discrete, and show / hide (layer names).
+shading, fog, occlusion, coloring, scrub_discrete, show / hide (layer names), and
+plots (True: the viewer's plots large under its 3D view).
 Consecutive steps of the same scene keep everything else, including where the
 presenter turned it.
 
 In the player: drag rotates, right drag pans, the wheel scrubs frames, pinch or
-ctrl + wheel zooms, a double click resets the camera. Keys: , and . step frames,
-P plays the trajectory, D toggles scrubbing the discrete states, 0 resets the
-camera; the arrows still change steps. Exported (llandau pdf), a live step shows
-a still image of its view.
+ctrl + wheel zooms, a double click resets the camera. Keys (? shows them over
+the view): P plays, , and . step frames, D discrete states, + and - zoom, 0
+resets the camera, L lit / flat, S atoms / protein (shift: side chains), C next
+coloring, 1-9 layers, G large plots; the arrows still change steps. Exported
+(llandau pdf), a live step shows a still image of its 3D view (without plots).
 """
 from __future__ import annotations
 
 __all__ = ["live_scene", "VIEW_KEYS"]
 
 SCENES = {}
-VIEW_KEYS = {"camera", "frame", "style", "sidechains", "shading", "fog", "occlusion", "coloring", "scrub_discrete", "show", "hide"}
+VIEW_KEYS = {"camera", "frame", "style", "sidechains", "shading", "fog", "occlusion", "coloring", "scrub_discrete", "show", "hide",
+             "plots"}
 
 
 def live_scene(name: str):
@@ -64,6 +68,8 @@ def apply_view(viewer, view: dict, camera: bool = True):
         viewer.set_visible(layer, False)
     if "frame" in view:
         viewer.frame = view["frame"]
+    if "plots" in view:
+        viewer.show_plots = bool(view["plots"])
     if camera and "camera" in view:
         viewer.camera = view["camera"]
 

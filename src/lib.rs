@@ -4,6 +4,7 @@
 pub mod camera;
 pub mod clash;
 pub mod occlusion;
+pub mod plots;
 pub mod protein;
 pub mod recording;
 pub mod render;
@@ -120,13 +121,23 @@ pub struct Viewer {
     stale: (bool, bool),
     window: Option<Window>,
     offscreen: Option<Offscreen>,
+    plots: plots::Plots,
+    /// the plots shown large: under the explorer's view, over a live view
+    show_plots: bool,
 }
 
 impl Viewer {
-    /// Draw into `view` (`size` pixels, `format`), for a deck's live region.
-    pub(crate) fn draw_into_view(&mut self, view: &wgpu::TextureView, format: wgpu::TextureFormat, size: (u32, u32)) {
+    /// Draw into `view` (`size` pixels, `format`), for a deck's live region; with a
+    /// viewport (left, top, width, height in pixels), only there.
+    pub(crate) fn draw_into_view(
+        &mut self,
+        view: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
+        size: (u32, u32),
+        viewport: Option<[f32; 4]>,
+    ) {
         self.upload();
-        self.renderer.draw(&self.gpu.device, &self.gpu.queue, view, format, size, None, &self.camera);
+        self.renderer.draw(&self.gpu.device, &self.gpu.queue, view, format, size, viewport, &self.camera);
     }
 
     fn upload(&mut self) {
@@ -189,6 +200,8 @@ impl Viewer {
             stale: (true, true),
             window: None,
             offscreen: None,
+            plots: plots::Plots::default(),
+            show_plots: false,
         })
     }
 
@@ -281,20 +294,18 @@ impl Viewer {
         Ok(array.into_any())
     }
 
-    /// Open the explorer window and return when it closes. plots: (name, xs,
-    /// values) on the scale of t, the parameter of each path frame; buttons:
+    /// Open the explorer window and return when it closes, with the viewer's
+    /// plots (see set_plots). buttons:
     /// (label, function of the camera dict returning text to copy); screenshot:
     /// write one frame of the window to this PNG file and close; recorder:
     /// function (width, height) -> video writer for the record button, which
     /// renders record_size pixels (default: the 3D view's) at record_fps.
-    #[pyo3(signature = (plots = None, t = None, info = None, buttons = None, title = None, size = (1300.0, 800.0),
+    #[pyo3(signature = (info = None, buttons = None, title = None, size = (1300.0, 800.0),
                         screenshot = None, recorder = None, record_size = None, record_fps = 60.0))]
     #[allow(clippy::too_many_arguments)]
     fn explore(
         &mut self,
         py: Python<'_>,
-        plots: Option<Vec<window::Curve>>,
-        t: Option<Vec<f64>>,
         info: Option<String>,
         buttons: Option<Vec<(String, Py<PyAny>)>>,
         title: Option<String>,
@@ -310,8 +321,6 @@ impl Viewer {
         let options = window::Options {
             title: title.unwrap_or_else(|| "llandau".into()),
             size,
-            plots: plots.unwrap_or_default(),
-            t: t.unwrap_or_default(),
             info,
             buttons: buttons.unwrap_or_default(),
             screenshot,
@@ -437,12 +446,40 @@ impl Viewer {
         Ok(())
     }
 
-    /// Forget the structure and every layer and setting (the theme stays).
+    /// Forget the structure, the plots and every layer and setting (the theme stays).
     fn reset(&mut self) {
         let theme = self.scene.theme;
         self.scene = Scene { theme, ..Scene::default() };
         self.frame = 0;
+        self.plots = plots::Plots::default();
+        self.show_plots = false;
         self.changed();
+    }
+
+    /// Scalars to plot along the trajectory, with a cursor at the current frame:
+    /// curves (name, xs, values) on the scale of t, the parameter of each path frame
+    /// (empty: the frame index).
+    #[pyo3(signature = (curves, t = None))]
+    fn set_plots(&mut self, curves: Vec<plots::Curve>, t: Option<Vec<f64>>) -> PyResult<()> {
+        for (name, xs, values) in &curves {
+            if xs.len() != values.len() {
+                return Err(value_error(format!("plot {name:?}: {} x values for {} values", xs.len(), values.len())));
+            }
+        }
+        self.plots = plots::Plots { curves, t: t.unwrap_or_default() };
+        Ok(())
+    }
+
+    /// Whether the plots are shown large: under the explorer's 3D view (key G), over a
+    /// deck's live view.
+    #[getter]
+    fn show_plots(&self) -> bool {
+        self.show_plots
+    }
+
+    #[setter]
+    fn set_show_plots(&mut self, on: bool) {
+        self.show_plots = on;
     }
 
     /// Set the element colors (atoms, 3 or 4). With `theme` ("light" or "dark")
@@ -1182,6 +1219,15 @@ impl window::Controls for Viewer {
     }
     fn camera(&self) -> Camera {
         self.camera
+    }
+    fn plots(&self) -> &plots::Plots {
+        &self.plots
+    }
+    fn show_plots(&self) -> bool {
+        self.show_plots
+    }
+    fn set_show_plots(&mut self, on: bool) {
+        self.show_plots = on;
     }
     fn set_camera(&mut self, camera: Camera) {
         self.camera = camera;

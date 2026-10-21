@@ -3,9 +3,9 @@
 //! keys while their step is shown.
 //!
 //! In a live region: drag rotates, right (or shift) drag pans, the wheel scrubs
-//! frames, pinch or ctrl + wheel zooms, a double click resets the camera.
-//! Keys: , and . step frames (with shift: 5% of them), P plays the trajectory,
-//! D toggles the discrete states, 0 resets the camera.
+//! frames, pinch or ctrl + wheel zooms, a double click resets the camera. The
+//! shown view also takes keys (KEYS, which ? shows over it): G shows the
+//! viewer's plots large under its 3D view, readable on a projector.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -17,8 +17,9 @@ use super::paint::{Painter, letterbox};
 use super::timeline::Timeline;
 use crate::Viewer;
 use crate::camera::Camera;
+use crate::plots;
 use crate::render::Gpu;
-use crate::window::Controls;
+use crate::window::{self, Controls};
 
 /// How long the camera takes to move to a step's view.
 const CAMERA_MOVE: Duration = Duration::from_millis(900);
@@ -28,6 +29,38 @@ const SCROLL_PER_FRAME: f32 = 12.0;
 const DOUBLE_CLICK: Duration = Duration::from_millis(350);
 /// The picture's format: drawn sRGB-encoded, sampled as written.
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+/// The overlay's scale: a live view is this many points high (text sizes are in points).
+const OVERLAY_HEIGHT: f32 = 600.0;
+/// The large plots' share of the view's height, and their text size.
+const PLOTS_HEIGHT: f32 = 0.4;
+const PLOTS_TEXT: f32 = 18.0;
+const ZOOM_STEP: f32 = 1.25;
+
+/// The keys of a shown live view, as ? shows them ("" keys head groups), and the
+/// deck's own.
+pub(crate) const KEYS: &[(&str, &str)] = &[
+    ("", "Live view"),
+    ("P", "play / pause"),
+    (", .", "previous / next frame (Shift: 5%)"),
+    ("D", "discrete states"),
+    ("drag", "rotate (right or Shift: pan)"),
+    ("wheel", "scrub frames (pinch or Ctrl: zoom)"),
+    ("+  −", "zoom in / out"),
+    ("0", "reset the camera (or double click)"),
+    ("L", "lit / flat shading"),
+    ("S", "atoms / protein (Shift: side chains)"),
+    ("C", "next coloring"),
+    ("1 – 9", "layers"),
+    ("G", "large plots"),
+    ("?", "these keys"),
+    ("", "Slides"),
+    ("→  Space", "next step"),
+    ("←", "previous step"),
+    ("Home  End", "first / last step"),
+    ("R", "replay the step"),
+    ("F", "full screen"),
+    ("Esc  Q", "leave full screen, quit"),
+];
 
 /// What a live span does when its step starts.
 pub struct Entry {
@@ -64,6 +97,63 @@ pub struct Lives {
     drag: Option<(usize, bool)>,
     cursor: (f64, f64),
     last_click: Option<Instant>,
+    /// the keys shown over the focused view
+    help: bool,
+    overlay: Option<Overlay>,
+}
+
+/// egui over a live view's picture: its plots and the keys.
+struct Overlay {
+    ctx: egui::Context,
+    renderer: egui_wgpu::Renderer,
+}
+
+impl Overlay {
+    fn new(device: &wgpu::Device) -> Self {
+        let options = egui_wgpu::RendererOptions { msaa_samples: 1, depth_stencil_format: None, dithering: true, ..Default::default() };
+        Self { ctx: egui::Context::default(), renderer: egui_wgpu::Renderer::new(device, FORMAT, options) }
+    }
+
+    /// Draw `contents` over `view` (`size` pixels); whether egui wants another frame.
+    fn draw(&mut self, gpu: &Gpu, view: &wgpu::TextureView, size: (u32, u32), dark: bool, contents: impl FnMut(&mut egui::Ui)) -> bool {
+        let ppp = size.1 as f32 / OVERLAY_HEIGHT;
+        let points = egui::vec2(size.0 as f32, size.1 as f32) / ppp;
+        let mut input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, points)), ..Default::default() };
+        input.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(ppp);
+        self.ctx.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+        let output = self.ctx.run_ui(input, contents);
+        let jobs = self.ctx.tessellate(output.shapes, output.pixels_per_point);
+        let screen = egui_wgpu::ScreenDescriptor { size_in_pixels: [size.0, size.1], pixels_per_point: output.pixels_per_point };
+        let (device, queue) = (&gpu.device, &gpu.queue);
+        for (id, deltas) in &output.textures_delta.set {
+            for delta in deltas {
+                self.renderer.update_texture(device, queue, *id, delta);
+            }
+        }
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("live overlay") });
+        self.renderer.update_buffers(device, queue, &mut encoder, &jobs, &screen);
+        {
+            let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("live overlay"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            self.renderer.render(&mut pass.forget_lifetime(), &jobs, &screen);
+        }
+        queue.submit([encoder.finish()]);
+        for id in &output.textures_delta.free {
+            self.renderer.free_texture(id);
+        }
+        output.viewport_output.values().any(|v| v.repaint_delay < Duration::from_millis(100))
+    }
 }
 
 fn smooth(t: f32) -> f32 {
@@ -151,8 +241,11 @@ impl Lives {
     }
 
     /// Draw the live views shown at `time` into their pictures, at the pixel
-    /// size their regions have in a target of `size`.
-    pub fn draw(&mut self, py: Python<'_>, gpu: &Gpu, painter: &mut Painter, timeline: &Timeline, time: f64, size: (u32, u32)) {
+    /// size their regions have in a target of `size`; whether to draw again soon
+    /// (an overlay settling).
+    pub fn draw(&mut self, py: Python<'_>, gpu: &Gpu, painter: &mut Painter, timeline: &Timeline, time: f64, size: (u32, u32)) -> bool {
+        let focused = self.focused(timeline, time);
+        let mut again = false;
         for span in timeline.live_at(time).collect::<Vec<_>>() {
             let live = timeline.lives[span];
             let rect = pixel_rect(timeline, size, live.rect);
@@ -178,8 +271,30 @@ impl Lives {
                 self.targets.insert(live.viewer, Target { size: pixels, view });
             }
             let target = &self.targets[&live.viewer];
-            self.viewers[live.viewer].bind(py).borrow_mut().draw_into_view(&target.view, FORMAT, pixels);
+            let mut v = self.viewers[live.viewer].bind(py).borrow_mut();
+            let plots = v.show_plots && !v.plots.is_empty();
+            let help = self.help && focused == Some(live.viewer);
+            // the plots go under the 3D view, which keeps the top
+            let viewport = plots.then(|| [0.0, 0.0, pixels.0 as f32, ((1.0 - PLOTS_HEIGHT) * pixels.1 as f32).round()]);
+            v.draw_into_view(&target.view, FORMAT, pixels, viewport);
+            if plots || help {
+                let x = v.plots.x(v.frame, Controls::num_frames(&*v), v.scene.scrub_discrete);
+                let dark = Controls::theme(&*v) == "dark";
+                let overlay = self.overlay.get_or_insert_with(|| Overlay::new(&gpu.device));
+                again |= overlay.draw(gpu, &target.view, pixels, dark, |ui| {
+                    if plots {
+                        egui::Panel::bottom("plots")
+                            .exact_size((PLOTS_HEIGHT * ui.available_height()).round())
+                            .resizable(false)
+                            .show(ui, |ui| v.plots.large(ui, x, PLOTS_TEXT));
+                    }
+                    if help {
+                        plots::help(ui, KEYS, 15.0);
+                    }
+                });
+            }
         }
+        again
     }
 
     /// The live view under the cursor at `time` (the topmost), and its pixel rectangle.
@@ -291,15 +406,23 @@ impl Lives {
                 Controls::set_frame(&mut *v, frame as usize);
             }
             "p" => state.playing = !state.playing,
-            "d" => {
-                let on = Controls::scrub_discrete(&*v);
-                Controls::set_scrub_discrete(&mut *v, !on);
-            }
+            "d" => window::toggle_discrete(&mut *v),
             "0" => {
                 state.camera_move = None;
                 Controls::reset_camera(&mut *v);
             }
-            _ => return false,
+            "+" | "=" => Controls::zoom(&mut *v, 1.0 / ZOOM_STEP),
+            "-" => Controls::zoom(&mut *v, ZOOM_STEP),
+            "l" => window::toggle_shading(&mut *v),
+            "s" if shift => window::toggle_sidechains(&mut *v),
+            "s" => window::toggle_style(&mut *v),
+            "c" => window::next_coloring(&mut *v),
+            "g" => v.show_plots = !v.show_plots,
+            "?" => self.help = !self.help,
+            _ => match key.parse::<usize>() {
+                Ok(n @ 1..=9) => window::toggle_layer(&mut *v, n - 1),
+                _ => return false,
+            },
         }
         true
     }

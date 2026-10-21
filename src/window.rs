@@ -1,11 +1,10 @@
 //! The explorer: a native window (winit) with the 3D view and a panel of
 //! controls and plots (egui), drawn with the viewer's own GPU device.
 //!
-//! Keys: space plays, , and . step frames (with shift: 5% of them), Home and
-//! End go to the first and last frame, D toggles the discrete states, 0 resets
-//! the camera, R starts and stops recording, Escape closes. Scrolling scrubs,
-//! faster when scrolling fast and for long trajectories; with shift, frame by
-//! frame.
+//! Every control has a key (see KEYS; ? shows them, the panel hints them):
+//! for presenting, H hides the panel, G shows the plots large under the view
+//! and F goes full screen. Scrolling scrubs, faster when scrolling fast and for
+//! long trajectories; with shift, frame by frame.
 //!
 //! Recording keeps the view's state at every redraw; stopping replays it
 //! offscreen at a fixed frame rate into a video (a few frames per redraw, so
@@ -15,8 +14,7 @@ use std::cell::RefCell;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use egui::{Color32, Key, PointerButton, Sense};
-use egui_plot::{Line, Plot, PlotPoints, Points, VLine};
+use egui::{Color32, Key, PointerButton, RichText, Sense};
 use numpy::{PyArray1, PyArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -25,9 +23,10 @@ use winit::dpi::LogicalSize;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::platform::run_on_demand::EventLoopExtRunOnDemand;
-use winit::window::{Window, WindowId};
+use winit::window::{Fullscreen, Window, WindowId};
 
 use crate::camera::Camera;
+use crate::plots::{self, Plots};
 use crate::recording::{Recording, State};
 use crate::render::{Gpu, Offscreen};
 
@@ -43,21 +42,53 @@ const MAX_ACCELERATION: f32 = 10.0;
 /// Time per redraw spent rendering a video's frames.
 const RENDER_BUDGET: Duration = Duration::from_millis(100);
 const VIDEO_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+/// The large plots' share of the window height, and their text size (points).
+const PLOTS_HEIGHT: f32 = 0.4;
+const PLOTS_TEXT: f32 = 18.0;
+/// Zoom per + or - key press.
+const ZOOM_STEP: f32 = 1.25;
+const COPY: &str = if cfg!(target_os = "macos") { "Cmd C" } else { "Ctrl C" };
+/// The keys hinted in the panel (in monospace: egui's text font lacks the arrows),
+/// for the test that egui can draw them.
+#[cfg(test)]
+pub(crate) const HINTS: [&str; 13] = ["← →", "Space", "D", "R", "T", "L", "S", "⇧S", "C", "1", "9", COPY, "?"];
+
+/// The explorer's keys, as its help shows them ("" keys head groups).
+pub(crate) const KEYS: &[(&str, &str)] = &[
+    ("", "Trajectory"),
+    ("Space  P", "play / pause"),
+    ("← →  , .", "previous / next frame (Shift: 5%)"),
+    ("Home  End", "first / last frame"),
+    ("D", "discrete states"),
+    ("", "View"),
+    ("drag", "rotate (right or Shift: pan)"),
+    ("wheel", "scrub frames (pinch or Ctrl: zoom)"),
+    ("+  −", "zoom in / out"),
+    ("0", "reset the camera (or double click)"),
+    ("", "Look"),
+    ("T", "light / dark"),
+    ("L", "lit / flat shading"),
+    ("S", "atoms / protein (Shift: side chains)"),
+    ("C", "next coloring"),
+    ("1 – 9", "layers, in the panel's order"),
+    ("", "Window"),
+    ("G", "large plots"),
+    ("H", "hide the panel"),
+    ("F", "full screen"),
+    ("R", "record a video"),
+    (COPY, "copy the camera"),
+    ("?", "these keys"),
+    ("Esc", "close the keys, full screen, the window"),
+];
 
 thread_local! {
     // winit allows one event loop per process; each explore() reuses it.
     static EVENT_LOOP: RefCell<Option<EventLoop<()>>> = const { RefCell::new(None) };
 }
 
-/// A scalar curve: (name, xs, values).
-pub type Curve = (String, Vec<f64>, Vec<f64>);
-
 pub struct Options {
     pub title: String,
     pub size: (f64, f64),
-    pub plots: Vec<Curve>,
-    /// parameter of each path frame (for the plot cursors)
-    pub t: Vec<f64>,
     pub info: Option<String>,
     /// label -> function of the camera dict returning text to copy
     pub buttons: Vec<(String, Py<PyAny>)>,
@@ -122,6 +153,10 @@ pub trait Controls {
     fn reset_camera(&mut self);
     fn camera(&self) -> Camera;
     fn set_camera(&mut self, camera: Camera);
+    fn plots(&self) -> &Plots;
+    /// whether the plots are shown large
+    fn show_plots(&self) -> bool;
+    fn set_show_plots(&mut self, on: bool);
     fn camera_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>>;
 }
 
@@ -149,6 +184,11 @@ struct App<'a, V: Explorable> {
     status: String,
     frames_drawn: u32,
     close_requested: bool,
+    panel_hidden: bool,
+    help: bool,
+    toggle_fullscreen: bool,
+    /// Escape: leave full screen, else close (applied with the window at hand)
+    escape: bool,
     record: Record,
     error: Option<PyErr>,
 }
@@ -190,6 +230,10 @@ pub fn explore<V: Explorable>(viewer: &mut V, py: Python<'_>, options: Options) 
             status: String::new(),
             frames_drawn: 0,
             close_requested: false,
+            panel_hidden: false,
+            help: false,
+            toggle_fullscreen: false,
+            escape: false,
             record: Record::Off,
             error: None,
         };
@@ -260,6 +304,17 @@ impl<V: Explorable> App<'_, V> {
         let egui = self.egui.clone();
         let output = egui.run_ui(raw_input, |ui| self.ui(ui));
         self.record_step();
+        let fullscreen = target.window.fullscreen().is_some();
+        if std::mem::take(&mut self.toggle_fullscreen) {
+            target.window.set_fullscreen(if fullscreen { None } else { Some(Fullscreen::Borderless(None)) });
+        }
+        if std::mem::take(&mut self.escape) {
+            if fullscreen {
+                target.window.set_fullscreen(None);
+            } else {
+                self.close_requested = true;
+            }
+        }
         target.egui_state.handle_platform_output(&target.window, output.platform_output);
         let paint_jobs = self.egui.tessellate(output.shapes, output.pixels_per_point);
         let ppp = output.pixels_per_point;
@@ -362,16 +417,26 @@ impl<V: Explorable> App<'_, V> {
         let dark = self.viewer.controls().theme() == "dark";
         ui.ctx().set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
         self.keys(ui);
-        egui::Panel::right("controls")
-            .exact_size(PANEL_WIDTH)
-            .resizable(false)
-            .show_separator_line(false)
-            .show(ui, |ui| {
-                egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-                    ui.set_max_width(PANEL_WIDTH - 24.0);
-                    self.panel(ui)
+        if !self.panel_hidden {
+            egui::Panel::right("controls")
+                .exact_size(PANEL_WIDTH)
+                .resizable(false)
+                .show_separator_line(false)
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+                        ui.set_max_width(PANEL_WIDTH - 24.0);
+                        self.panel(ui)
+                    });
                 });
-            });
+        }
+        let x = self.plot_x();
+        let controls = self.viewer.controls();
+        if controls.show_plots() && !controls.plots().is_empty() {
+            egui::Panel::bottom("plots")
+                .exact_size((PLOTS_HEIGHT * ui.available_height()).round())
+                .resizable(false)
+                .show(ui, |ui| controls.plots().large(ui, x, PLOTS_TEXT));
+        }
         // the 3D view shows through the central panel, which only takes input
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
             let rect = ui.max_rect();
@@ -379,6 +444,9 @@ impl<V: Explorable> App<'_, V> {
             self.viewport = rect;
             self.pointer(ui, &response);
         });
+        if self.help {
+            plots::help(ui, KEYS, 15.0);
+        }
     }
 
     fn keys(&mut self, ui: &egui::Ui) {
@@ -386,30 +454,77 @@ impl<V: Explorable> App<'_, V> {
             return;
         }
         let pressed = |key| ui.input(|i| i.key_pressed(key));
+        let shift = ui.input(|i| i.modifiers.shift);
         let controls = self.viewer.controls();
-        if pressed(Key::Space) {
+        if pressed(Key::Space) || pressed(Key::P) {
             self.playing = !self.playing;
         }
         // shift: jump 5% of the trajectory (at least 10 frames)
         let count = controls.num_frames().max(1) as i64;
-        let jump = if ui.input(|i| i.modifiers.shift) { (count / 20).max(10) } else { 1 };
-        for (key, step) in [(Key::Comma, -jump), (Key::Period, jump), (Key::Home, -count), (Key::End, count)] {
+        let jump = if shift { (count / 20).max(10) } else { 1 };
+        for (key, step) in [
+            (Key::ArrowLeft, -jump),
+            (Key::Comma, -jump),
+            (Key::ArrowRight, jump),
+            (Key::Period, jump),
+            (Key::Home, -count),
+            (Key::End, count),
+        ] {
             if pressed(key) {
-                controls.set_frame((controls.frame() as i64 + step).clamp(0, count - 1) as usize);
+                step_frames(controls, step);
             }
         }
-        if pressed(Key::D) && controls.num_discrete_frames() > 0 {
-            let on = !controls.scrub_discrete();
-            controls.set_scrub_discrete(on);
+        if pressed(Key::D) {
+            toggle_discrete(controls);
         }
         if pressed(Key::Num0) {
             controls.reset_camera();
         }
+        if pressed(Key::Plus) || pressed(Key::Equals) {
+            controls.zoom(1.0 / ZOOM_STEP);
+        }
+        if pressed(Key::Minus) {
+            controls.zoom(ZOOM_STEP);
+        }
+        if pressed(Key::T) {
+            let next = if controls.theme() == "dark" { "light" } else { "dark" };
+            controls.set_theme(next);
+        }
+        if pressed(Key::L) {
+            toggle_shading(controls);
+        }
+        if pressed(Key::S) {
+            if shift { toggle_sidechains(controls) } else { toggle_style(controls) }
+        }
+        if pressed(Key::C) {
+            next_coloring(controls);
+        }
+        for (index, key) in NUMBER_KEYS.into_iter().enumerate() {
+            if pressed(key) {
+                toggle_layer(controls, index);
+            }
+        }
+        if pressed(Key::G) {
+            let on = !controls.show_plots();
+            controls.set_show_plots(on);
+        }
+        if pressed(Key::H) {
+            self.panel_hidden = !self.panel_hidden;
+        }
+        if pressed(Key::F) {
+            self.toggle_fullscreen = true;
+        }
+        if pressed(Key::Questionmark) || (pressed(Key::Slash) && shift) {
+            self.help = !self.help;
+        }
+        if pressed(Key::Escape) {
+            if self.help { self.help = false } else { self.escape = true }
+        }
         if pressed(Key::R) {
             self.toggle_recording(ui.ctx().pixels_per_point());
         }
-        if pressed(Key::Escape) {
-            self.close_requested = true;
+        if ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy))) {
+            self.copy(ui.ctx(), None);
         }
     }
 
@@ -472,16 +587,19 @@ impl<V: Explorable> App<'_, V> {
             if ui.add(egui::Slider::new(&mut frame, 0..=count - 1)).changed() {
                 controls.set_frame(frame);
             }
+            hint(ui, "← →");
         });
         ui.horizontal(|ui| {
             if ui.button(if self.playing { "Pause" } else { "Play" }).clicked() {
                 self.playing = !self.playing;
             }
+            hint(ui, "Space");
             if controls.num_discrete_frames() > 0 {
                 let mut on = controls.scrub_discrete();
                 if ui.checkbox(&mut on, "scrub discrete").changed() {
                     controls.set_scrub_discrete(on);
                 }
+                hint(ui, "D");
             }
         });
         self.record_controls(ui);
@@ -490,14 +608,16 @@ impl<V: Explorable> App<'_, V> {
 
         // appearance
         egui::Grid::new("appearance").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-            choice(ui, "theme", &["light", "dark"], controls.theme(), |name| controls.set_theme(name));
+            choice(ui, "theme", "T", &["light", "dark"], controls.theme(), |name| controls.set_theme(name));
             ui.end_row();
-            choice(ui, "shading", &["lit", "flat"], controls.shading(), |s| controls.set_shading(s));
+            choice(ui, "shading", "L", &["lit", "flat"], controls.shading(), |s| controls.set_shading(s));
             ui.end_row();
             if controls.has_roles() {
-                choice(ui, "style", &["atoms", "protein"], controls.style(), |s| controls.set_style(s));
+                choice(ui, "style", "S", &["atoms", "protein"], controls.style(), |s| controls.set_style(s));
                 ui.end_row();
-                choice(ui, "side chains", &["sticks", "spheres"], controls.sidechains(), |s| controls.set_sidechains(s));
+                choice(ui, "side chains", "⇧S", &["sticks", "spheres"], controls.sidechains(), |s| {
+                    controls.set_sidechains(s)
+                });
                 ui.end_row();
             }
             let colorings = controls.coloring_names();
@@ -505,7 +625,7 @@ impl<V: Explorable> App<'_, V> {
                 let names: Vec<&str> = std::iter::once("element").chain(colorings.iter().map(String::as_str)).collect();
                 let current = controls.coloring().unwrap_or_else(|| "element".into());
                 let mut picked = None;
-                choice(ui, "color", &names, &current, |name| picked = Some(name.to_string()));
+                choice(ui, "color", "C", &names, &current, |name| picked = Some(name.to_string()));
                 if let Some(name) = picked {
                     controls.set_coloring(Some(name).filter(|n| n != "element"));
                 }
@@ -515,11 +635,16 @@ impl<V: Explorable> App<'_, V> {
         ui.separator();
 
         // layers
-        for (layer, visible) in controls.layers() {
+        for (index, (layer, visible)) in controls.layers().into_iter().enumerate() {
             let mut on = visible;
-            if ui.checkbox(&mut on, layer.as_str()).changed() {
-                controls.set_visible(&layer, on);
-            }
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut on, layer.as_str()).changed() {
+                    controls.set_visible(&layer, on);
+                }
+                if index < NUMBER_KEYS.len() {
+                    hint(ui, &(index + 1).to_string());
+                }
+            });
         }
         ui.separator();
 
@@ -556,7 +681,7 @@ impl<V: Explorable> App<'_, V> {
             }
             ui.end_row();
             let by_atom = controls.surface_colors_by_atom();
-            choice(ui, "surface color", &["uniform", "atoms"], if by_atom { "atoms" } else { "uniform" }, |c| {
+            choice(ui, "surface color", "", &["uniform", "atoms"], if by_atom { "atoms" } else { "uniform" }, |c| {
                 controls.set_surface_colors_by_atom(c == "atoms")
             });
             ui.end_row();
@@ -578,6 +703,7 @@ impl<V: Explorable> App<'_, V> {
             if ui.button("copy camera").clicked() {
                 copy = Some(None);
             }
+            hint(ui, COPY);
             for (index, (label, _)) in self.options.buttons.iter().enumerate() {
                 if ui.button(label).clicked() {
                     copy = Some(Some(index));
@@ -585,43 +711,21 @@ impl<V: Explorable> App<'_, V> {
             }
         });
         if let Some(which) = copy {
-            match self.copy_text(which) {
-                Ok(text) => {
-                    println!("{text}");
-                    ui.ctx().copy_text(text);
-                    self.status = "copied".into();
-                }
-                Err(error) => self.status = format!("{error}"),
-            }
+            self.copy(ui.ctx(), which);
         }
         if !self.status.is_empty() {
             ui.small(&self.status);
         }
 
-        // plots
-        let x = self.current_t();
-        for (name, xs, ys) in &self.options.plots {
-            let value = interpolate(xs, ys, x);
-            ui.add_space(6.0);
-            ui.label(format!("{name}: {value:.4}"));
-            let points: PlotPoints = xs.iter().zip(ys).filter(|(_, y)| y.is_finite()).map(|(x, y)| [*x, *y]).collect();
-            Plot::new(name.as_str())
-                .height(90.0)
-                .width(ui.available_width())
-                .allow_zoom(false)
-                .allow_scroll(false)
-                .allow_drag(false)
-                .allow_boxed_zoom(false)
-                .show_x(false)
-                .show_y(false)
-                .show(ui, |plot| {
-                    plot.line(Line::new(name.as_str(), points));
-                    plot.vline(VLine::new("t", x).color(Color32::GRAY));
-                    if value.is_finite() {
-                        plot.points(Points::new("now", vec![[x, value]]).radius(4.0).color(Color32::from_rgb(220, 50, 50)));
-                    }
-                });
+        // plots, unless shown large
+        let x = self.plot_x();
+        let controls = self.viewer.controls();
+        if !controls.show_plots() {
+            controls.plots().small(ui, x);
         }
+        ui.add_space(8.0);
+        let large = if controls.plots().is_empty() { "" } else { "G large plots · " };
+        ui.label(RichText::new(format!("? keys · {large}H hide panel · F full screen")).small().weak());
     }
 
     fn record_controls(&mut self, ui: &mut egui::Ui) {
@@ -630,17 +734,19 @@ impl<V: Explorable> App<'_, V> {
         ui.horizontal(|ui| match &self.record {
             Record::Off => {
                 let available = self.options.recorder.is_some();
-                let button = ui.add_enabled(available, egui::Button::new("⏺ Record"));
+                let button = ui.add_enabled(available, egui::Button::new("Record"));
                 if available {
-                    toggle = button.on_hover_text("R: start; the video is rendered when you stop").clicked();
+                    toggle = button.on_hover_text("the video is rendered when you stop").clicked();
+                    hint(ui, "R");
                 } else {
                     button.on_disabled_hover_text("recording needs ffmpeg: pip install 'llandau[video]'");
                 }
             }
             Record::On { start, size, .. } => {
-                toggle = ui.button("⏹ Stop").clicked();
+                toggle = ui.button("Stop").clicked();
                 let seconds = start.elapsed().as_secs();
-                ui.colored_label(Color32::from_rgb(220, 50, 50), format!("● {}:{:02}", seconds / 60, seconds % 60));
+                let time = format!("● {}:{:02}", seconds / 60, seconds % 60);
+                ui.label(RichText::new(time).monospace().color(Color32::from_rgb(220, 50, 50)));
                 ui.small(format!("{}×{}", size.0, size.1));
             }
             Record::Rendering { next, total, .. } => {
@@ -762,6 +868,18 @@ impl<V: Explorable> App<'_, V> {
         self.status = status;
     }
 
+    /// Copy the camera (or a button's text of it) to the clipboard, and print it.
+    fn copy(&mut self, ctx: &egui::Context, which: Option<usize>) {
+        match self.copy_text(which) {
+            Ok(text) => {
+                println!("{text}");
+                ctx.copy_text(text);
+                self.status = "copied".into();
+            }
+            Err(error) => self.status = format!("{error}"),
+        }
+    }
+
     fn copy_text(&mut self, which: Option<usize>) -> PyResult<String> {
         let camera = self.viewer.controls().camera_dict(self.py)?;
         match which {
@@ -773,18 +891,63 @@ impl<V: Explorable> App<'_, V> {
         }
     }
 
-    /// The path parameter of the current frame (discrete states spread evenly over the path).
-    fn current_t(&mut self) -> f64 {
-        let t = &self.options.t;
-        let controls = self.viewer.controls();
-        if t.is_empty() {
-            return controls.frame() as f64;
-        }
-        if controls.scrub_discrete() {
-            let fraction = controls.frame() as f64 / (controls.num_frames().max(2) - 1) as f64;
-            return t[0] + fraction * (t[t.len() - 1] - t[0]);
-        }
-        t[controls.frame().min(t.len() - 1)]
+    /// Where the plots' cursor is: the path parameter of the current frame.
+    fn plot_x(&mut self) -> f64 {
+        let c = self.viewer.controls();
+        c.plots().x(c.frame(), c.num_frames(), c.scrub_discrete())
+    }
+}
+
+const NUMBER_KEYS: [Key; 9] =
+    [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9];
+
+// what the explorer's and the live views' keys do
+
+pub(crate) fn step_frames(c: &mut dyn Controls, step: i64) {
+    let count = c.num_frames().max(1) as i64;
+    c.set_frame((c.frame() as i64 + step).clamp(0, count - 1) as usize);
+}
+
+pub(crate) fn toggle_discrete(c: &mut dyn Controls) {
+    if c.num_discrete_frames() > 0 {
+        let on = !c.scrub_discrete();
+        c.set_scrub_discrete(on);
+    }
+}
+
+pub(crate) fn toggle_shading(c: &mut dyn Controls) {
+    let next = if c.shading() == "lit" { "flat" } else { "lit" };
+    c.set_shading(next);
+}
+
+pub(crate) fn toggle_style(c: &mut dyn Controls) {
+    if c.has_roles() {
+        let next = if c.style() == "atoms" { "protein" } else { "atoms" };
+        c.set_style(next);
+    }
+}
+
+pub(crate) fn toggle_sidechains(c: &mut dyn Controls) {
+    if c.has_roles() {
+        let next = if c.sidechains() == "sticks" { "spheres" } else { "sticks" };
+        c.set_sidechains(next);
+    }
+}
+
+/// Element colors, then each named coloring in turn.
+pub(crate) fn next_coloring(c: &mut dyn Controls) {
+    let names = c.coloring_names();
+    let next = match c.coloring() {
+        None => names.first().cloned(),
+        Some(current) => names.iter().position(|n| *n == current).and_then(|i| names.get(i + 1)).cloned(),
+    };
+    c.set_coloring(next);
+}
+
+/// The `index`th layer (as the panel lists them) on or off.
+pub(crate) fn toggle_layer(c: &mut dyn Controls, index: usize) {
+    if let Some((name, visible)) = c.layers().into_iter().nth(index) {
+        c.set_visible(&name, !visible);
     }
 }
 
@@ -799,8 +962,19 @@ fn scroll_gain(scroll: f32, elapsed: f32, precise: bool, num_frames: usize) -> f
     length * (speed / SCROLL_SPEED).clamp(1.0, MAX_ACCELERATION)
 }
 
-fn choice(ui: &mut egui::Ui, label: &str, options: &[&str], current: &str, mut apply: impl FnMut(&str)) {
-    ui.label(label);
+/// A key's hint beside its control: small and dim.
+fn hint(ui: &mut egui::Ui, key: &str) {
+    ui.label(RichText::new(key).monospace().weak());
+}
+
+/// A labeled drop-down (its key hinted after the label, if any).
+fn choice(ui: &mut egui::Ui, label: &str, key: &str, options: &[&str], current: &str, mut apply: impl FnMut(&str)) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        if !key.is_empty() {
+            hint(ui, key);
+        }
+    });
     egui::ComboBox::from_id_salt(label).selected_text(current).show_ui(ui, |ui| {
         for option in options {
             if ui.selectable_label(*option == current, *option).clicked() && *option != current {
@@ -808,17 +982,6 @@ fn choice(ui: &mut egui::Ui, label: &str, options: &[&str], current: &str, mut a
             }
         }
     });
-}
-
-fn interpolate(xs: &[f64], ys: &[f64], x: f64) -> f64 {
-    match xs.iter().position(|&v| v >= x) {
-        None => *ys.last().unwrap_or(&f64::NAN),
-        Some(0) => ys[0],
-        Some(i) => {
-            let w = (x - xs[i - 1]) / (xs[i] - xs[i - 1]).max(1e-12);
-            ys[i - 1] + w * (ys[i] - ys[i - 1])
-        }
-    }
 }
 
 pub(crate) fn save_png(path: &str, size: (u32, u32), format: wgpu::TextureFormat, pixels: &[u8]) -> Result<(), String> {
