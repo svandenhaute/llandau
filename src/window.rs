@@ -18,7 +18,7 @@ use egui::{Color32, Key, PointerButton, RichText, Sense};
 use numpy::{PyArray1, PyArrayMethods};
 use pyo3::prelude::*;
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
+use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::platform::run_on_demand::EventLoopExtRunOnDemand;
@@ -27,10 +27,10 @@ use winit::window::{Fullscreen, Window, WindowId};
 use crate::Viewer;
 use crate::plots;
 use crate::recording::{Recording, State};
-use crate::render::Offscreen;
+use crate::render::{Gpu, Offscreen};
 
 const PANEL_WIDTH: f32 = 300.0;
-const PLAY_INTERVAL: Duration = Duration::from_millis(33);
+pub(crate) const PLAY_INTERVAL: Duration = Duration::from_millis(33);
 /// Wheel or trackpad points per frame when scrubbing slowly, for up to this many frames.
 const SCROLL_PER_FRAME: f32 = 12.0;
 const SHORT_TRAJECTORY: f32 = 200.0;
@@ -41,9 +41,6 @@ const MAX_ACCELERATION: f32 = 10.0;
 /// Time per redraw spent rendering a video's frames.
 const RENDER_BUDGET: Duration = Duration::from_millis(100);
 const VIDEO_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
-/// The large plots' share of the window height, and their text size (points).
-const PLOTS_HEIGHT: f32 = 0.4;
-const PLOTS_TEXT: f32 = 18.0;
 /// Zoom per + or - key press.
 const ZOOM_STEP: f32 = 1.25;
 const COPY: &str = if cfg!(target_os = "macos") { "Cmd C" } else { "Ctrl C" };
@@ -101,10 +98,189 @@ pub struct Options {
     pub record_fps: f64,
 }
 
-struct Surface {
-    window: Arc<Window>,
+/// A window and the wgpu surface drawn into it (the explorer's and the deck player's).
+pub(crate) struct Surface {
+    pub window: Arc<Window>,
     surface: wgpu::Surface<'static>,
-    config: wgpu::SurfaceConfiguration,
+    pub config: wgpu::SurfaceConfiguration,
+}
+
+impl Surface {
+    /// A window of `size` logical pixels; srgb picks an sRGB format when there is one
+    /// (else a plain one: the deck writes sRGB values as they are).
+    pub fn new(event_loop: &ActiveEventLoop, gpu: &Gpu, title: &str, size: (f64, f64), srgb: bool, fullscreen: bool) -> Result<Self, String> {
+        let mut attributes = Window::default_attributes().with_title(title).with_inner_size(LogicalSize::new(size.0, size.1));
+        if fullscreen {
+            attributes = attributes.with_fullscreen(Some(Fullscreen::Borderless(None)));
+        }
+        let window = Arc::new(event_loop.create_window(attributes).map_err(|e| e.to_string())?);
+        let surface = gpu.instance.create_surface(window.clone()).map_err(|e| e.to_string())?;
+        let capabilities = surface.get_capabilities(&gpu.adapter);
+        let format = capabilities
+            .formats
+            .iter()
+            .copied()
+            .find(|f| f.is_srgb() == srgb)
+            .or_else(|| capabilities.formats.first().copied())
+            .ok_or("the window supports no format")?;
+        let size = window.inner_size();
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: size.width.max(1),
+            height: size.height.max(1),
+            present_mode: wgpu::PresentMode::AutoVsync,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: capabilities.alpha_modes[0],
+            view_formats: vec![],
+            color_space: wgpu::SurfaceColorSpace::Auto,
+        };
+        surface.configure(&gpu.device, &config);
+        Ok(Self { window, surface, config })
+    }
+
+    pub fn size(&self) -> (u32, u32) {
+        (self.config.width, self.config.height)
+    }
+
+    pub fn resize(&mut self, device: &wgpu::Device, size: PhysicalSize<u32>) {
+        self.config.width = size.width.max(1);
+        self.config.height = size.height.max(1);
+        self.surface.configure(device, &self.config);
+        self.window.request_redraw();
+    }
+
+    /// The frame to draw into; None when there is none right now (the surface
+    /// was lost and is configured again, or the window is occluded).
+    pub fn acquire(&self, device: &wgpu::Device) -> Option<wgpu::SurfaceTexture> {
+        match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => Some(t),
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                self.surface.configure(device, &self.config);
+                None
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Paint one egui frame over `view` (`size` pixels); whether egui wants another frame soon.
+pub(crate) fn paint_egui(
+    renderer: &mut egui_wgpu::Renderer,
+    gpu: &Gpu,
+    ctx: &egui::Context,
+    output: egui::FullOutput,
+    view: &wgpu::TextureView,
+    size: (u32, u32),
+) -> bool {
+    let (device, queue) = (&gpu.device, &gpu.queue);
+    let jobs = ctx.tessellate(output.shapes, output.pixels_per_point);
+    let screen = egui_wgpu::ScreenDescriptor { size_in_pixels: [size.0, size.1], pixels_per_point: output.pixels_per_point };
+    for (id, deltas) in &output.textures_delta.set {
+        for delta in deltas {
+            renderer.update_texture(device, queue, *id, delta);
+        }
+    }
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("egui") });
+    renderer.update_buffers(device, queue, &mut encoder, &jobs, &screen);
+    {
+        let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("egui"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        renderer.render(&mut pass.forget_lifetime(), &jobs, &screen);
+    }
+    queue.submit([encoder.finish()]);
+    for id in &output.textures_delta.free {
+        renderer.free_texture(id);
+    }
+    output.viewport_output.values().any(|v| v.repaint_delay < Duration::from_millis(100))
+}
+
+pub(crate) fn egui_renderer(gpu: &Gpu, format: wgpu::TextureFormat) -> egui_wgpu::Renderer {
+    let options = egui_wgpu::RendererOptions { msaa_samples: 1, depth_stencil_format: None, dithering: true, ..Default::default() };
+    egui_wgpu::Renderer::new(&gpu.device, format, options)
+}
+
+/// Wheel points turned into whole frames, faster when scrolling fast and for long
+/// trajectories; `precise` (shift) scrolls frame by frame.
+#[derive(Default)]
+pub(crate) struct Scrub {
+    accumulated: f32,
+    last: Option<Instant>,
+}
+
+impl Scrub {
+    pub fn frames(&mut self, points: f32, precise: bool, num_frames: usize) -> i64 {
+        let elapsed = self.last.map_or(1.0, |t| t.elapsed().as_secs_f32());
+        self.last = Some(Instant::now());
+        self.accumulated -= points / SCROLL_PER_FRAME * scroll_gain(points, elapsed, precise, num_frames);
+        let steps = self.accumulated.trunc();
+        self.accumulated -= steps;
+        steps as i64
+    }
+}
+
+/// The 3D view's egui-independent keys, shared with live views: frames, discrete
+/// states, zoom, the camera, the look, layers, the plots. True when `key` is one.
+pub(crate) fn view_key(v: &mut Viewer, key: char, shift: bool) -> bool {
+    // shift: jump 5% of the trajectory (at least 10 frames)
+    let count = v.num_frames().max(1) as i64;
+    let jump = if shift { (count / 20).max(10) } else { 1 };
+    match key {
+        ',' | '<' => step_frames(v, -jump),
+        '.' | '>' => step_frames(v, jump),
+        'd' => drop(v.set_scrub_discrete(!v.scene.scrub_discrete)),
+        '0' => v.reset_camera(),
+        '+' | '=' => v.zoom(1.0 / ZOOM_STEP),
+        '-' => v.zoom(ZOOM_STEP),
+        'l' => drop(v.set_shading(if v.shading() == "lit" { "flat" } else { "lit" })),
+        's' if shift => drop(v.set_sidechains(if v.sidechains() == "sticks" { "spheres" } else { "sticks" })),
+        's' => drop(v.set_style(if v.style() == "atoms" { "protein" } else { "atoms" })),
+        'c' => next_coloring(v),
+        'g' => v.show_plots = !v.show_plots,
+        '1'..='9' => toggle_layer(v, key as usize - '1' as usize),
+        _ => return false,
+    }
+    true
+}
+
+/// The egui keys of `view_key`, as characters.
+const VIEW_KEYS: [(Key, char); 20] = [
+    (Key::Comma, ','),
+    (Key::Period, '.'),
+    (Key::D, 'd'),
+    (Key::Num0, '0'),
+    (Key::Plus, '+'),
+    (Key::Equals, '='),
+    (Key::Minus, '-'),
+    (Key::L, 'l'),
+    (Key::S, 's'),
+    (Key::C, 'c'),
+    (Key::G, 'g'),
+    (Key::Num1, '1'),
+    (Key::Num2, '2'),
+    (Key::Num3, '3'),
+    (Key::Num4, '4'),
+    (Key::Num5, '5'),
+    (Key::Num6, '6'),
+    (Key::Num7, '7'),
+    (Key::Num8, '8'),
+    (Key::Num9, '9'),
+];
+
+/// The explorer's window with egui on it.
+struct Target {
+    surface: Surface,
     egui_state: egui_winit::State,
     egui_renderer: egui_wgpu::Renderer,
 }
@@ -114,13 +290,12 @@ struct App<'a> {
     py: Python<'a>,
     options: Options,
     egui: egui::Context,
-    surface: Option<Surface>,
+    surface: Option<Target>,
     /// the 3D view's rectangle in points, from the last layout
     viewport: egui::Rect,
     playing: bool,
     last_step: Instant,
-    scroll: f32,
-    last_scroll: Instant,
+    scrub: Scrub,
     initial_scales: Vec<(String, f32)>,
     status: String,
     frames_drawn: u32,
@@ -165,8 +340,7 @@ pub fn explore(viewer: &mut Viewer, py: Python<'_>, options: Options) -> PyResul
             viewport: egui::Rect::NOTHING,
             playing: false,
             last_step: Instant::now(),
-            scroll: 0.0,
-            last_scroll: Instant::now(),
+            scrub: Scrub::default(),
             initial_scales,
             status: String::new(),
             frames_drawn: 0,
@@ -189,48 +363,19 @@ pub fn explore(viewer: &mut Viewer, py: Python<'_>, options: Options) -> PyResul
 }
 
 impl App<'_> {
-    fn create_surface(&mut self, event_loop: &ActiveEventLoop) -> Result<Surface, String> {
-        let attributes = Window::default_attributes()
-            .with_title(self.options.title.clone())
-            .with_inner_size(LogicalSize::new(self.options.size.0, self.options.size.1));
-        let window = Arc::new(event_loop.create_window(attributes).map_err(|e| e.to_string())?);
+    fn create_surface(&mut self, event_loop: &ActiveEventLoop) -> Result<Target, String> {
         let gpu = &self.viewer.gpu;
-        let surface = gpu.instance.create_surface(window.clone()).map_err(|e| e.to_string())?;
-        let capabilities = surface.get_capabilities(&gpu.adapter);
-        let format = capabilities
-            .formats
-            .iter()
-            .copied()
-            .find(|f| f.is_srgb())
-            .or_else(|| capabilities.formats.first().copied())
-            .ok_or("the window supports no format")?;
-        let size = window.inner_size();
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
-            width: size.width.max(1),
-            height: size.height.max(1),
-            present_mode: wgpu::PresentMode::AutoVsync,
-            desired_maximum_frame_latency: 2,
-            alpha_mode: capabilities.alpha_modes[0],
-            view_formats: vec![],
-            color_space: wgpu::SurfaceColorSpace::Auto,
-        };
-        surface.configure(&gpu.device, &config);
+        let surface = Surface::new(event_loop, gpu, &self.options.title, self.options.size, true, false)?;
         let egui_state = egui_winit::State::new(
             self.egui.clone(),
             egui::ViewportId::ROOT,
-            &window,
-            Some(window.scale_factor() as f32),
+            &surface.window,
+            Some(surface.window.scale_factor() as f32),
             None,
             Some(gpu.device.limits().max_texture_dimension_2d as usize),
         );
-        let egui_renderer = egui_wgpu::Renderer::new(
-            &gpu.device,
-            format,
-            egui_wgpu::RendererOptions { msaa_samples: 1, depth_stencil_format: None, dithering: true, ..Default::default() },
-        );
-        Ok(Surface { window, surface, config, egui_state, egui_renderer })
+        let egui_renderer = egui_renderer(gpu, surface.config.format);
+        Ok(Target { surface, egui_state, egui_renderer })
     }
 
     fn redraw(&mut self) {
@@ -241,28 +386,24 @@ impl App<'_> {
             self.viewer.set_frame(frame);
         }
         let Some(mut target) = self.surface.take() else { return };
-        let raw_input = target.egui_state.take_egui_input(&target.window);
+        let window = target.surface.window.clone();
+        let raw_input = target.egui_state.take_egui_input(&window);
         let egui = self.egui.clone();
         let output = egui.run_ui(raw_input, |ui| self.ui(ui));
         self.record_step();
-        let fullscreen = target.window.fullscreen().is_some();
+        let fullscreen = window.fullscreen().is_some();
         if std::mem::take(&mut self.toggle_fullscreen) {
-            target.window.set_fullscreen(if fullscreen { None } else { Some(Fullscreen::Borderless(None)) });
+            window.set_fullscreen(if fullscreen { None } else { Some(Fullscreen::Borderless(None)) });
         }
         if std::mem::take(&mut self.escape) {
             if fullscreen {
-                target.window.set_fullscreen(None);
+                window.set_fullscreen(None);
             } else {
                 self.close_requested = true;
             }
         }
-        target.egui_state.handle_platform_output(&target.window, output.platform_output);
-        let paint_jobs = self.egui.tessellate(output.shapes, output.pixels_per_point);
+        target.egui_state.handle_platform_output(&window, output.platform_output.clone());
         let ppp = output.pixels_per_point;
-        let screen = egui_wgpu::ScreenDescriptor {
-            size_in_pixels: [target.config.width, target.config.height],
-            pixels_per_point: ppp,
-        };
         let viewport = [
             self.viewport.min.x * ppp,
             self.viewport.min.y * ppp,
@@ -271,32 +412,23 @@ impl App<'_> {
         ];
 
         // the screenshot frame goes to an offscreen copy of the window instead
-        let screenshot = self.options.screenshot.clone().filter(|_| self.frames_drawn >= 2);
-        let size = (target.config.width, target.config.height);
-        let format = target.config.format;
-        let (device, queue) = (self.viewer.gpu.device.clone(), self.viewer.gpu.queue.clone());
-        for (id, deltas) in &output.textures_delta.set {
-            for delta in deltas {
-                target.egui_renderer.update_texture(&device, &queue, *id, delta);
-            }
-        }
+        let screenshot = if self.frames_drawn >= 2 { self.options.screenshot.take() } else { None };
+        let size = target.surface.size();
+        let format = target.surface.config.format;
+        let gpu = self.viewer.gpu.clone();
         let mut offscreen = None;
-        let surface_texture = if screenshot.is_some() {
-            offscreen = Some(Offscreen::with_format(&device, size, format));
-            None
-        } else {
-            match target.surface.get_current_texture() {
-                wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => Some(t),
-                wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                    target.surface.configure(&device, &target.config);
-                    self.surface = Some(target);
-                    return;
-                }
-                _ => {
-                    self.surface = Some(target);
-                    return;
-                }
+        let surface_texture = match &screenshot {
+            Some(_) => {
+                offscreen = Some(Offscreen::with_format(&gpu.device, size, format));
+                None
             }
+            None => match target.surface.acquire(&gpu.device) {
+                Some(texture) => Some(texture),
+                None => {
+                    self.surface = Some(target);
+                    return;
+                }
+            },
         };
         let view = match (&surface_texture, &offscreen) {
             (Some(texture), _) => texture.texture.create_view(&Default::default()),
@@ -305,37 +437,14 @@ impl App<'_> {
         };
 
         self.viewer.draw_into(&view, format, size, Some(viewport));
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("egui") });
-        target.egui_renderer.update_buffers(&device, &queue, &mut encoder, &paint_jobs, &screen);
-        {
-            let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("egui"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            target.egui_renderer.render(&mut pass.forget_lifetime(), &paint_jobs, &screen);
-        }
-        queue.submit([encoder.finish()]);
-        for id in &output.textures_delta.free {
-            target.egui_renderer.free_texture(id);
-        }
+        let settling = paint_egui(&mut target.egui_renderer, &gpu, &egui, output, &view, size);
         match (surface_texture, screenshot, offscreen) {
-            (Some(texture), _, _) => queue.present(texture),
+            (Some(texture), _, _) => gpu.queue.present(texture),
             (None, Some(path), Some(offscreen)) => {
-                let pixels = offscreen.read(&self.viewer.gpu);
+                let pixels = offscreen.read(&gpu);
                 if let Err(error) = save_png(&path, size, format, &pixels) {
                     self.error = Some(crate::runtime_error(error));
                 }
-                self.options.screenshot = None;
                 self.surface = Some(target);
                 self.close_requested = true;
                 return;
@@ -343,12 +452,8 @@ impl App<'_> {
             _ => {}
         }
         self.frames_drawn += 1;
-        let again = self.playing
-            || !matches!(self.record, Record::Off)
-            || self.options.screenshot.is_some()
-            || output.viewport_output.values().any(|v| v.repaint_delay < Duration::from_millis(100));
-        if again {
-            target.window.request_redraw();
+        if self.playing || !matches!(self.record, Record::Off) || self.options.screenshot.is_some() || settling {
+            window.request_redraw();
         }
         self.surface = Some(target);
     }
@@ -371,11 +476,8 @@ impl App<'_> {
         }
         let x = self.plot_x();
         let v = &*self.viewer;
-        if v.show_plots && !v.plots.is_empty() {
-            egui::Panel::bottom("plots")
-                .exact_size((PLOTS_HEIGHT * ui.available_height()).round())
-                .resizable(false)
-                .show(ui, |ui| v.plots.large(ui, x, PLOTS_TEXT));
+        if v.show_plots {
+            v.plots.bottom_panel(ui, x);
         }
         // the 3D view shows through the central panel, which only takes input
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
@@ -396,55 +498,27 @@ impl App<'_> {
         let pressed = |key| ui.input(|i| i.key_pressed(key));
         let shift = ui.input(|i| i.modifiers.shift);
         let v = &mut *self.viewer;
+        for (key, c) in VIEW_KEYS {
+            if pressed(key) {
+                view_key(v, c, shift);
+            }
+        }
         if pressed(Key::Space) || pressed(Key::P) {
             self.playing = !self.playing;
         }
-        // shift: jump 5% of the trajectory (at least 10 frames)
         let count = v.num_frames().max(1) as i64;
-        let jump = if shift { (count / 20).max(10) } else { 1 };
-        for (key, step) in [
-            (Key::ArrowLeft, -jump),
-            (Key::Comma, -jump),
-            (Key::ArrowRight, jump),
-            (Key::Period, jump),
-            (Key::Home, -count),
-            (Key::End, count),
-        ] {
+        for (key, c) in [(Key::ArrowLeft, ','), (Key::ArrowRight, '.')] {
+            if pressed(key) {
+                view_key(v, c, shift);
+            }
+        }
+        for (key, step) in [(Key::Home, -count), (Key::End, count)] {
             if pressed(key) {
                 step_frames(v, step);
             }
         }
-        if pressed(Key::D) {
-            toggle_discrete(v);
-        }
-        if pressed(Key::Num0) {
-            v.reset_camera();
-        }
-        if pressed(Key::Plus) || pressed(Key::Equals) {
-            v.zoom(1.0 / ZOOM_STEP);
-        }
-        if pressed(Key::Minus) {
-            v.zoom(ZOOM_STEP);
-        }
         if pressed(Key::T) {
             let _ = v.set_theme(if v.theme() == "dark" { "light" } else { "dark" });
-        }
-        if pressed(Key::L) {
-            toggle_shading(v);
-        }
-        if pressed(Key::S) {
-            if shift { toggle_sidechains(v) } else { toggle_style(v) }
-        }
-        if pressed(Key::C) {
-            next_coloring(v);
-        }
-        for (index, key) in NUMBER_KEYS.into_iter().enumerate() {
-            if pressed(key) {
-                toggle_layer(v, index);
-            }
-        }
-        if pressed(Key::G) {
-            v.show_plots = !v.show_plots;
         }
         if pressed(Key::H) {
             self.panel_hidden = !self.panel_hidden;
@@ -477,11 +551,7 @@ impl App<'_> {
             (0.0, 1.0)
         };
         let num_frames = self.viewer.num_frames().max(1);
-        if scroll != 0.0 {
-            self.scroll -= scroll / SCROLL_PER_FRAME * self.scroll_gain(scroll, shift, num_frames);
-        }
-        let steps = self.scroll.trunc();
-        self.scroll -= steps;
+        let steps = if scroll != 0.0 { self.scrub.frames(scroll, shift, num_frames) } else { 0 };
 
         let v = &mut *self.viewer;
         if response.dragged_by(PointerButton::Primary) && !shift {
@@ -495,17 +565,9 @@ impl App<'_> {
         if zoom != 1.0 {
             v.zoom(1.0 / zoom);
         }
-        if steps != 0.0 {
-            step_frames(v, steps as i64);
+        if steps != 0 {
+            step_frames(v, steps);
         }
-    }
-
-    /// Frames per scrolled point, relative to SCROLL_PER_FRAME: more for long
-    /// trajectories and for fast scrolling; shift scrolls frame by frame.
-    fn scroll_gain(&mut self, scroll: f32, precise: bool, num_frames: usize) -> f32 {
-        let elapsed = self.last_scroll.elapsed().as_secs_f32();
-        self.last_scroll = Instant::now();
-        scroll_gain(scroll, elapsed, precise, num_frames)
     }
 
     fn panel(&mut self, ui: &mut egui::Ui) {
@@ -576,7 +638,7 @@ impl App<'_> {
                 if ui.checkbox(&mut on, layer.as_str()).changed() {
                     let _ = v.set_visible(&layer, on);
                 }
-                if index < NUMBER_KEYS.len() {
+                if index < 9 {
                     hint(ui, &(index + 1).to_string());
                 }
             });
@@ -832,34 +894,13 @@ impl App<'_> {
     }
 }
 
-const NUMBER_KEYS: [Key; 9] =
-    [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9];
-
-// what the explorer's and the live views' keys do
-
 pub(crate) fn step_frames(v: &mut Viewer, step: i64) {
     let count = v.num_frames().max(1) as i64;
     v.set_frame((v.frame as i64 + step).clamp(0, count - 1) as usize);
 }
 
-pub(crate) fn toggle_discrete(v: &mut Viewer) {
-    let _ = v.set_scrub_discrete(!v.scene.scrub_discrete);
-}
-
-pub(crate) fn toggle_shading(v: &mut Viewer) {
-    let _ = v.set_shading(if v.shading() == "lit" { "flat" } else { "lit" });
-}
-
-pub(crate) fn toggle_style(v: &mut Viewer) {
-    let _ = v.set_style(if v.style() == "atoms" { "protein" } else { "atoms" });
-}
-
-pub(crate) fn toggle_sidechains(v: &mut Viewer) {
-    let _ = v.set_sidechains(if v.sidechains() == "sticks" { "spheres" } else { "sticks" });
-}
-
 /// Element colors, then each named coloring in turn.
-pub(crate) fn next_coloring(v: &mut Viewer) {
+fn next_coloring(v: &mut Viewer) {
     let names = v.coloring_names();
     let next = match &v.scene.coloring {
         None => names.first().cloned(),
@@ -869,7 +910,7 @@ pub(crate) fn next_coloring(v: &mut Viewer) {
 }
 
 /// The `index`th layer (as the panel lists them) on or off.
-pub(crate) fn toggle_layer(v: &mut Viewer, index: usize) {
+fn toggle_layer(v: &mut Viewer, index: usize) {
     if let Some((name, visible)) = v.layers().into_iter().nth(index) {
         let _ = v.set_visible(&name, !visible);
     }
@@ -877,7 +918,7 @@ pub(crate) fn toggle_layer(v: &mut Viewer, index: usize) {
 
 /// Frames per scrolled point relative to SCROLL_PER_FRAME, for `scroll` points
 /// `elapsed` seconds after the previous scroll event.
-fn scroll_gain(scroll: f32, elapsed: f32, precise: bool, num_frames: usize) -> f32 {
+pub(crate) fn scroll_gain(scroll: f32, elapsed: f32, precise: bool, num_frames: usize) -> f32 {
     if precise {
         return 1.0;
     }
@@ -922,9 +963,9 @@ impl ApplicationHandler for App<'_> {
             return;
         }
         match self.create_surface(event_loop) {
-            Ok(surface) => {
-                surface.window.request_redraw();
-                self.surface = Some(surface);
+            Ok(target) => {
+                target.surface.window.request_redraw();
+                self.surface = Some(target);
             }
             Err(error) => {
                 self.error = Some(crate::runtime_error(format!("cannot open a window: {error}")));
@@ -935,19 +976,14 @@ impl ApplicationHandler for App<'_> {
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let Some(target) = self.surface.as_mut() else { return };
-        let response = target.egui_state.on_window_event(&target.window, &event);
+        let response = target.egui_state.on_window_event(&target.surface.window, &event);
         match event {
             WindowEvent::CloseRequested => self.close_requested = true,
-            WindowEvent::Resized(size) => {
-                target.config.width = size.width.max(1);
-                target.config.height = size.height.max(1);
-                target.surface.configure(&self.viewer.gpu.device, &target.config);
-                target.window.request_redraw();
-            }
+            WindowEvent::Resized(size) => target.surface.resize(&self.viewer.gpu.device, size),
             WindowEvent::RedrawRequested => self.redraw(),
             _ => {
                 if response.repaint {
-                    target.window.request_redraw();
+                    target.surface.window.request_redraw();
                 }
             }
         }
@@ -968,7 +1004,7 @@ impl ApplicationHandler for App<'_> {
         if self.playing
             && let Some(target) = &self.surface
         {
-            target.window.request_redraw();
+            target.surface.window.request_redraw();
         }
     }
 }

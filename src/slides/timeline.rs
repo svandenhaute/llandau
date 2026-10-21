@@ -192,7 +192,7 @@ impl Timeline {
     }
 
     /// Indices of the live views shown at `time`.
-    pub fn live_at(&self, time: f64) -> impl Iterator<Item = usize> + '_ {
+    pub fn live_at(&self, time: f64) -> impl DoubleEndedIterator<Item = usize> + '_ {
         (0..self.lives.len()).filter(move |&i| self.lives[i].span[0] <= time && time < self.lives[i].span[1])
     }
 

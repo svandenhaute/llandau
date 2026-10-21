@@ -9,6 +9,9 @@ use egui_plot::{Line, Plot, PlotPoints, Points, VLine};
 pub type Curve = (String, Vec<f64>, Vec<f64>);
 
 const CURSOR: Color32 = Color32::from_rgb(220, 50, 50);
+/// The large plots' share of a view's height, and their text size (points).
+pub const PLOTS_HEIGHT: f32 = 0.4;
+const PLOTS_TEXT: f32 = 18.0;
 
 /// A viewer's plots: curves on the scale of `t`, the parameter of each path frame.
 #[derive(Clone, Debug, Default)]
@@ -50,9 +53,20 @@ impl Plots {
         }
     }
 
+    /// The large plots under a 3D view, as a bottom panel taking PLOTS_HEIGHT of `ui`.
+    pub fn bottom_panel(&self, ui: &mut egui::Ui, x: f64) {
+        if self.is_empty() {
+            return;
+        }
+        egui::Panel::bottom("plots")
+            .exact_size((PLOTS_HEIGHT * ui.available_height()).round())
+            .resizable(false)
+            .show(ui, |ui| self.large(ui, x, PLOTS_TEXT));
+    }
+
     /// Plots side by side filling `ui`, with axes and their numbers at `text`
     /// points, each titled with its name and value.
-    pub fn large(&self, ui: &mut egui::Ui, x: f64, text: f32) {
+    fn large(&self, ui: &mut egui::Ui, x: f64, text: f32) {
         let style = ui.style_mut();
         for (kind, size) in [(TextStyle::Body, text), (TextStyle::Small, 0.8 * text), (TextStyle::Heading, 1.2 * text)] {
             if let Some(font) = style.text_styles.get_mut(&kind) {

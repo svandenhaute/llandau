@@ -6,22 +6,21 @@
 //! closes, Q closes. Scrolling scrubs through time, faster when scrolling fast.
 //! Over a live 3D view, the mouse and some keys go to it (see `live`; ? shows them).
 
-use std::sync::Arc;
 use std::time::Instant;
 
 use pyo3::prelude::*;
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::platform::run_on_demand::EventLoopExtRunOnDemand;
-use winit::window::{Fullscreen, Window, WindowId};
+use winit::window::{Fullscreen, WindowId};
 
 use super::live::Lives;
 use super::paint::{Image, Painter};
 use super::timeline::Timeline;
 use crate::render::{Gpu, Offscreen};
+use crate::window::{self, Surface};
 
 /// Seconds of the timeline per scrolled point (line: 20 points), before acceleration.
 const SCRUB_PER_POINT: f64 = 0.004;
@@ -36,12 +35,6 @@ pub struct Options {
     pub start: usize,
     /// draw the end of the start step into this PNG file and close
     pub screenshot: Option<String>,
-}
-
-struct Surface {
-    window: Arc<Window>,
-    surface: wgpu::Surface<'static>,
-    config: wgpu::SurfaceConfiguration,
 }
 
 struct App<'a> {
@@ -152,47 +145,12 @@ impl App<'_> {
 
     fn scrub(&mut self, points: f64) {
         self.playing = None;
-        let elapsed = self.last_scroll.elapsed().as_secs_f64().max(1e-3);
+        let elapsed = self.last_scroll.elapsed().as_secs_f32();
         self.last_scroll = Instant::now();
-        let speed = points.abs() / elapsed;
-        let gain = (speed / 400.0).clamp(1.0, 10.0);
+        let gain = window::scroll_gain(points as f32, elapsed, false, 0) as f64;
         self.time = (self.time + points * SCRUB_PER_POINT * gain).clamp(0.0, self.timeline.duration());
         // the step whose mark is the first at or after the time
         self.step = self.timeline.marks.iter().position(|m| m.time - REST_BEFORE_MARK >= self.time - 1e-9).unwrap_or(self.last_step());
-    }
-
-    fn create_surface(&mut self, event_loop: &ActiveEventLoop) -> Result<Surface, String> {
-        let mut attributes = Window::default_attributes()
-            .with_title(self.options.title.clone())
-            .with_inner_size(LogicalSize::new(self.options.size.0, self.options.size.1));
-        if self.options.fullscreen {
-            attributes = attributes.with_fullscreen(Some(Fullscreen::Borderless(None)));
-        }
-        let window = Arc::new(event_loop.create_window(attributes).map_err(|e| e.to_string())?);
-        let surface = self.gpu.instance.create_surface(window.clone()).map_err(|e| e.to_string())?;
-        let capabilities = surface.get_capabilities(&self.gpu.adapter);
-        // values are written as they are (sRGB, like cairo): prefer a plain format
-        let format = capabilities
-            .formats
-            .iter()
-            .copied()
-            .find(|f| !f.is_srgb())
-            .or_else(|| capabilities.formats.first().copied())
-            .ok_or("the window supports no format")?;
-        let size = window.inner_size();
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
-            width: size.width.max(1),
-            height: size.height.max(1),
-            present_mode: wgpu::PresentMode::AutoVsync,
-            desired_maximum_frame_latency: 2,
-            alpha_mode: capabilities.alpha_modes[0],
-            view_formats: vec![],
-            color_space: wgpu::SurfaceColorSpace::Auto,
-        };
-        surface.configure(&self.gpu.device, &config);
-        Ok(Surface { window, surface, config })
     }
 
     fn redraw(&mut self) {
@@ -207,7 +165,7 @@ impl App<'_> {
         }
         let live_moving = self.lives.animate(self.py);
         let Some(target) = self.surface.as_mut() else { return };
-        let size = (target.config.width, target.config.height);
+        let size = target.size();
         let overlay_settling = self.lives.draw(self.py, self.gpu, self.painter, self.timeline, self.time, size);
         if let Some(path) = self.options.screenshot.take() {
             let offscreen = Offscreen::with_format(&self.gpu.device, size, target.config.format);
@@ -229,14 +187,9 @@ impl App<'_> {
             self.closing = true;
             return;
         }
-        let texture = match target.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                target.surface.configure(&self.gpu.device, &target.config);
-                target.window.request_redraw();
-                return;
-            }
-            _ => return,
+        let Some(texture) = target.acquire(&self.gpu.device) else {
+            target.window.request_redraw();
+            return;
         };
         let view = texture.texture.create_view(&Default::default());
         self.painter.draw(
@@ -303,7 +256,7 @@ impl App<'_> {
     }
 
     fn size(&self) -> (u32, u32) {
-        self.surface.as_ref().map_or((1, 1), |t| (t.config.width, t.config.height))
+        self.surface.as_ref().map_or((1, 1), Surface::size)
     }
 
     fn request_redraw(&self) {
@@ -323,7 +276,8 @@ impl ApplicationHandler for App<'_> {
         if self.surface.is_some() {
             return;
         }
-        match self.create_surface(event_loop) {
+        let options = &self.options;
+        match Surface::new(event_loop, self.gpu, &options.title, options.size, false, options.fullscreen) {
             Ok(surface) => {
                 surface.window.request_redraw();
                 self.surface = Some(surface);
@@ -340,10 +294,7 @@ impl ApplicationHandler for App<'_> {
             WindowEvent::CloseRequested => self.close(event_loop),
             WindowEvent::Resized(size) => {
                 if let Some(target) = self.surface.as_mut() {
-                    target.config.width = size.width.max(1);
-                    target.config.height = size.height.max(1);
-                    target.surface.configure(&self.gpu.device, &target.config);
-                    target.window.request_redraw();
+                    target.resize(&self.gpu.device, size);
                 }
             }
             WindowEvent::RedrawRequested => self.redraw(),

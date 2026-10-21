@@ -7,7 +7,6 @@
 //! shown view also takes keys (KEYS, which ? shows over it): G shows the
 //! viewer's plots large under its 3D view, readable on a projector.
 
-use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use pyo3::prelude::*;
@@ -17,24 +16,17 @@ use super::paint::{Painter, letterbox};
 use super::timeline::Timeline;
 use crate::Viewer;
 use crate::camera::Camera;
-use crate::plots;
+use crate::plots::{self, PLOTS_HEIGHT};
 use crate::render::Gpu;
-use crate::window;
+use crate::window::{self, PLAY_INTERVAL, Scrub};
 
 /// How long the camera takes to move to a step's view.
 const CAMERA_MOVE: Duration = Duration::from_millis(900);
-const PLAY_INTERVAL: Duration = Duration::from_millis(33);
-/// Wheel points per frame when scrubbing slowly.
-const SCROLL_PER_FRAME: f32 = 12.0;
 const DOUBLE_CLICK: Duration = Duration::from_millis(350);
 /// The picture's format: drawn sRGB-encoded, sampled as written.
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// The overlay's scale: a live view is this many points high (text sizes are in points).
 const OVERLAY_HEIGHT: f32 = 600.0;
-/// The large plots' share of the view's height, and their text size.
-const PLOTS_HEIGHT: f32 = 0.4;
-const PLOTS_TEXT: f32 = 18.0;
-const ZOOM_STEP: f32 = 1.25;
 
 /// The keys of a shown live view, as ? shows them ("" keys head groups), and the
 /// deck's own.
@@ -83,7 +75,6 @@ struct State {
     camera_move: Option<(Instant, Camera, Camera)>,
     playing: bool,
     last_step: Option<Instant>,
-    scroll: f32,
 }
 
 #[derive(Default)]
@@ -91,12 +82,14 @@ pub struct Lives {
     pub viewers: Vec<Py<Viewer>>,
     /// one per timeline live span
     pub entries: Vec<Entry>,
-    targets: HashMap<usize, Target>,
-    states: HashMap<usize, State>,
+    /// per viewer
+    targets: Vec<Option<Target>>,
+    states: Vec<State>,
     /// (viewer, button) being dragged, and the last cursor position
     drag: Option<(usize, bool)>,
     cursor: (f64, f64),
     last_click: Option<Instant>,
+    scrub: Scrub,
     /// the keys shown over the focused view
     help: bool,
     overlay: Option<Overlay>,
@@ -109,9 +102,8 @@ struct Overlay {
 }
 
 impl Overlay {
-    fn new(device: &wgpu::Device) -> Self {
-        let options = egui_wgpu::RendererOptions { msaa_samples: 1, depth_stencil_format: None, dithering: true, ..Default::default() };
-        Self { ctx: egui::Context::default(), renderer: egui_wgpu::Renderer::new(device, FORMAT, options) }
+    fn new(gpu: &Gpu) -> Self {
+        Self { ctx: egui::Context::default(), renderer: window::egui_renderer(gpu, FORMAT) }
     }
 
     /// Draw `contents` over `view` (`size` pixels); whether egui wants another frame.
@@ -122,37 +114,7 @@ impl Overlay {
         input.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(ppp);
         self.ctx.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
         let output = self.ctx.run_ui(input, contents);
-        let jobs = self.ctx.tessellate(output.shapes, output.pixels_per_point);
-        let screen = egui_wgpu::ScreenDescriptor { size_in_pixels: [size.0, size.1], pixels_per_point: output.pixels_per_point };
-        let (device, queue) = (&gpu.device, &gpu.queue);
-        for (id, deltas) in &output.textures_delta.set {
-            for delta in deltas {
-                self.renderer.update_texture(device, queue, *id, delta);
-            }
-        }
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("live overlay") });
-        self.renderer.update_buffers(device, queue, &mut encoder, &jobs, &screen);
-        {
-            let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("live overlay"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            self.renderer.render(&mut pass.forget_lifetime(), &jobs, &screen);
-        }
-        queue.submit([encoder.finish()]);
-        for id in &output.textures_delta.free {
-            self.renderer.free_texture(id);
-        }
-        output.viewport_output.values().any(|v| v.repaint_delay < Duration::from_millis(100))
+        window::paint_egui(&mut self.renderer, gpu, &self.ctx, output, view, size)
     }
 }
 
@@ -167,6 +129,8 @@ impl Lives {
             return i;
         }
         self.viewers.push(viewer);
+        self.targets.push(None);
+        self.states.push(State::default());
         self.viewers.len() - 1
     }
 
@@ -176,15 +140,15 @@ impl Lives {
         let active: Vec<usize> = timeline.live_at(time).collect();
         let shown: Vec<usize> = active.iter().map(|&i| timeline.lives[i].viewer).collect();
         // views no longer shown start afresh next time
-        for (viewer, state) in self.states.iter_mut() {
-            if !shown.contains(viewer) {
+        for (viewer, state) in self.states.iter_mut().enumerate() {
+            if !shown.contains(&viewer) {
                 state.entered = None;
                 state.playing = false;
             }
         }
         for span in active {
             let viewer_index = timeline.lives[span].viewer;
-            let state = self.states.entry(viewer_index).or_default();
+            let state = &mut self.states[viewer_index];
             if state.entered == Some(span) {
                 continue;
             }
@@ -214,7 +178,7 @@ impl Lives {
     /// Advance camera moves and playing trajectories; whether anything moves.
     pub fn animate(&mut self, py: Python<'_>) -> bool {
         let mut moving = false;
-        for (&index, state) in self.states.iter_mut() {
+        for (index, state) in self.states.iter_mut().enumerate() {
             if state.entered.is_none() {
                 continue;
             }
@@ -250,7 +214,7 @@ impl Lives {
             let live = timeline.lives[span];
             let rect = pixel_rect(timeline, size, live.rect);
             let pixels = (rect[2].round().max(1.0) as u32, rect[3].round().max(1.0) as u32);
-            if !matches!(self.targets.get(&live.viewer), Some(t) if t.size == pixels) {
+            if !matches!(&self.targets[live.viewer], Some(t) if t.size == pixels) {
                 let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("live view"),
                     size: wgpu::Extent3d { width: pixels.0, height: pixels.1, depth_or_array_layers: 1 },
@@ -268,9 +232,9 @@ impl Lives {
                     ..Default::default()
                 });
                 painter.set_live(&gpu.device, live.viewer, &sampled);
-                self.targets.insert(live.viewer, Target { size: pixels, view });
+                self.targets[live.viewer] = Some(Target { size: pixels, view });
             }
-            let target = &self.targets[&live.viewer];
+            let target = self.targets[live.viewer].as_ref().unwrap();
             let mut v = self.viewers[live.viewer].bind(py).borrow_mut();
             let plots = v.show_plots && !v.plots.is_empty();
             let help = self.help && focused == Some(live.viewer);
@@ -280,13 +244,10 @@ impl Lives {
             if plots || help {
                 let x = v.plots.x(v.frame, v.num_frames(), v.scene.scrub_discrete);
                 let dark = v.theme() == "dark";
-                let overlay = self.overlay.get_or_insert_with(|| Overlay::new(&gpu.device));
+                let overlay = self.overlay.get_or_insert_with(|| Overlay::new(gpu));
                 again |= overlay.draw(gpu, &target.view, pixels, dark, |ui| {
                     if plots {
-                        egui::Panel::bottom("plots")
-                            .exact_size((PLOTS_HEIGHT * ui.available_height()).round())
-                            .resizable(false)
-                            .show(ui, |ui| v.plots.large(ui, x, PLOTS_TEXT));
+                        v.plots.bottom_panel(ui, x);
                     }
                     if help {
                         plots::help(ui, KEYS, 15.0);
@@ -299,7 +260,7 @@ impl Lives {
 
     /// The live view under the cursor at `time` (the topmost), and its pixel rectangle.
     fn under(&self, timeline: &Timeline, time: f64, size: (u32, u32), at: (f64, f64)) -> Option<(usize, [f32; 4])> {
-        timeline.live_at(time).collect::<Vec<_>>().into_iter().rev().find_map(|span| {
+        timeline.live_at(time).rev().find_map(|span| {
             let live = timeline.lives[span];
             let r = pixel_rect(timeline, size, live.rect);
             let (x, y) = (at.0 as f32, at.1 as f32);
@@ -316,15 +277,12 @@ impl Lives {
         let (dx, dy) = ((at.0 - self.cursor.0) as f32, (at.1 - self.cursor.1) as f32);
         self.cursor = at;
         let Some((viewer, pan)) = self.drag else { return false };
-        let height = self
-            .targets
-            .get(&viewer)
+        let height = self.targets[viewer]
+            .as_ref()
             .map(|t| t.size.1 as f32)
             .unwrap_or_else(|| pixel_rect(timeline, size, [0.0, 0.0, 1.0, 1.0])[3]);
         let mut v = self.viewers[viewer].bind(py).borrow_mut();
-        if let Some(state) = self.states.get_mut(&viewer) {
-            state.camera_move = None;
-        }
+        self.states[viewer].camera_move = None;
         if pan {
             v.pan(dx, dy, height);
         } else {
@@ -369,15 +327,9 @@ impl Lives {
             v.zoom((-points * 0.004).exp());
             return true;
         }
-        let state = self.states.entry(viewer).or_default();
-        let count = v.num_frames().max(1);
-        let gain = (count as f32 / 200.0).max(1.0).sqrt();
-        state.scroll -= points / SCROLL_PER_FRAME * gain;
-        let steps = state.scroll.trunc();
-        state.scroll -= steps;
-        if steps != 0.0 {
-            let frame = (v.frame as i64 + steps as i64).clamp(0, count as i64 - 1);
-            v.set_frame(frame as usize);
+        let steps = self.scrub.frames(points, false, v.num_frames());
+        if steps != 0 {
+            window::step_frames(&mut v, steps);
         }
         true
     }
@@ -393,36 +345,17 @@ impl Lives {
     pub fn key(&mut self, py: Python<'_>, timeline: &Timeline, time: f64, key: &str, shift: bool) -> bool {
         let Some(viewer) = self.focused(timeline, time) else { return false };
         let mut v = self.viewers[viewer].bind(py).borrow_mut();
-        let count = v.num_frames().max(1);
-        let state = self.states.entry(viewer).or_default();
-        let step = if shift { (count / 20).max(10) } else { 1 } as i64;
+        let state = &mut self.states[viewer];
         match key {
-            "," | "<" => {
-                let frame = (v.frame as i64 - step).max(0);
-                v.set_frame(frame as usize);
-            }
-            "." | ">" => {
-                let frame = (v.frame as i64 + step).min(count as i64 - 1);
-                v.set_frame(frame as usize);
-            }
             "p" => state.playing = !state.playing,
-            "d" => window::toggle_discrete(&mut *v),
-            "0" => {
-                state.camera_move = None;
-                v.reset_camera();
-            }
-            "+" | "=" => v.zoom(1.0 / ZOOM_STEP),
-            "-" => v.zoom(ZOOM_STEP),
-            "l" => window::toggle_shading(&mut *v),
-            "s" if shift => window::toggle_sidechains(&mut *v),
-            "s" => window::toggle_style(&mut *v),
-            "c" => window::next_coloring(&mut *v),
-            "g" => v.show_plots = !v.show_plots,
             "?" => self.help = !self.help,
-            _ => match key.parse::<usize>() {
-                Ok(n @ 1..=9) => window::toggle_layer(&mut *v, n - 1),
-                _ => return false,
-            },
+            _ => {
+                let Some(c) = key.chars().next().filter(|_| key.chars().count() == 1) else { return false };
+                if c == '0' {
+                    state.camera_move = None;
+                }
+                return window::view_key(&mut v, c, shift);
+            }
         }
         true
     }

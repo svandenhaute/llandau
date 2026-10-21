@@ -25,19 +25,19 @@ pub struct Slides {
     timeline: Timeline,
     images: Vec<Image>,
     lives: Lives,
-    gpu: Option<Gpu>,
-    painter: Option<Painter>,
+    /// made when first drawn
+    gpu: Option<(Gpu, Painter)>,
     offscreen: Option<Offscreen>,
 }
 
 impl Slides {
-    fn gpu(&mut self) -> PyResult<(&Gpu, &mut Painter)> {
+    fn gpu(&mut self) -> PyResult<&mut (Gpu, Painter)> {
         if self.gpu.is_none() {
             let gpu = Gpu::shared().map_err(runtime_error)?;
-            self.painter = Some(Painter::new(&gpu.device));
-            self.gpu = Some(gpu);
+            let painter = Painter::new(&gpu.device);
+            self.gpu = Some((gpu, painter));
         }
-        Ok((self.gpu.as_ref().unwrap(), self.painter.as_mut().unwrap()))
+        Ok(self.gpu.as_mut().unwrap())
     }
 }
 
@@ -54,7 +54,6 @@ impl Slides {
             images: Vec::new(),
             lives: Lives::default(),
             gpu: None,
-            painter: None,
             offscreen: None,
         }
     }
@@ -219,9 +218,8 @@ impl Slides {
         const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
         let size = (width.max(1), height.max(1));
         self.gpu()?;
-        let gpu = self.gpu.as_ref().unwrap();
+        let (gpu, painter) = self.gpu.as_mut().unwrap();
         let target = Offscreen::ensure(&mut self.offscreen, &gpu.device, size, FORMAT);
-        let painter = self.painter.as_mut().unwrap();
         painter.draw(&gpu.device, &gpu.queue, &self.timeline, &self.images, time, target.view(), FORMAT, size);
         let pixels = target.read(gpu);
         Ok(PyArray1::from_vec(py, pixels).reshape([size.1 as usize, size.0 as usize, 4])?.into_any())
@@ -242,7 +240,7 @@ impl Slides {
         self.gpu()?;
         let title = title.unwrap_or_else(|| "slides".into());
         let options = player::Options { title, size, fullscreen, start, screenshot };
-        let (gpu, painter) = (self.gpu.as_ref().unwrap(), self.painter.as_mut().unwrap());
+        let (gpu, painter) = self.gpu.as_mut().unwrap();
         player::play(py, gpu, painter, &self.timeline, &self.images, &mut self.lives, options)
     }
 }
