@@ -14,7 +14,7 @@ import sys
 import numpy as np
 
 from .mobject import (
-    DOWN, ORIGIN, PI, TAU, UP, YELLOW, Color, Group, ImageMobject, Mobject, VMobject, OUT,
+    ORIGIN, PI, TAU, YELLOW, Group, ImageMobject, Mobject, VMobject, OUT,
 )
 
 __all__ = [
