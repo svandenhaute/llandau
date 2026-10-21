@@ -72,7 +72,7 @@ pub(crate) const KEYS: &[(&str, &str)] = &[
     ("H", "hide the panel"),
     ("F", "full screen"),
     ("R", "record a video"),
-    (COPY, "copy the camera"),
+    (COPY, "copy the view's state"),
     ("?", "these keys"),
     ("Esc", "close the keys, full screen, the window"),
 ];
@@ -91,8 +91,11 @@ pub struct Options {
     /// render one frame of the window to this PNG path and close
     pub screenshot: Option<String>,
     /// function (width, height) -> video writer (write(frame), close() -> path,
-    /// abort()) for the record button; None: recording is unavailable
+    /// abort()) for the record button, which then renders a video
     pub recorder: Option<Py<PyAny>>,
+    /// function (samples: list of (time, state dict)) -> path, for the record
+    /// button, which then saves the keyframes; neither: recording is unavailable
+    pub keyframes: Option<Py<PyAny>>,
     /// video size in pixels (default: the 3D view's) and frames per second
     pub record_size: Option<(u32, u32)>,
     pub record_fps: f64,
@@ -710,7 +713,7 @@ impl App<'_> {
         // copy buttons
         let mut copy = None;
         ui.horizontal_wrapped(|ui| {
-            if ui.button("copy camera").clicked() {
+            if ui.button("copy state").on_hover_text("the view as a dict: for live(view=...) in a deck").clicked() {
                 copy = Some(None);
             }
             hint(ui, COPY);
@@ -743,13 +746,18 @@ impl App<'_> {
         let mut cancel = false;
         ui.horizontal(|ui| match &self.record {
             Record::Off => {
-                let available = self.options.recorder.is_some();
+                let available = self.options.recorder.is_some() || self.options.keyframes.is_some();
                 let button = ui.add_enabled(available, egui::Button::new("Record"));
                 if available {
-                    toggle = button.on_hover_text("the video is rendered when you stop").clicked();
+                    let what = if self.options.recorder.is_some() {
+                        "the video is rendered when you stop"
+                    } else {
+                        "what you do, as keyframes in a JSON file a deck can play"
+                    };
+                    toggle = button.on_hover_text(what).clicked();
                     hint(ui, "R");
                 } else {
-                    button.on_disabled_hover_text("recording needs ffmpeg: pip install 'llandau[video]'");
+                    button.on_disabled_hover_text("a video needs ffmpeg: pip install 'llandau[video]'");
                 }
             }
             Record::On { start, size, .. } => {
@@ -773,10 +781,10 @@ impl App<'_> {
         }
     }
 
-    /// Start recording, or stop it and start rendering the video.
+    /// Start recording, or stop it: save the keyframes, or start rendering the video.
     fn toggle_recording(&mut self, pixels_per_point: f32) {
         match std::mem::replace(&mut self.record, Record::Off) {
-            Record::Off if self.options.recorder.is_some() => {
+            Record::Off if self.options.recorder.is_some() || self.options.keyframes.is_some() => {
                 let view = self.viewport.size() * pixels_per_point;
                 let (width, height) = self.options.record_size.unwrap_or((view.x as u32, view.y as u32));
                 // even sizes: what H.264 players take
@@ -785,6 +793,12 @@ impl App<'_> {
                 self.status.clear();
             }
             Record::Off => {}
+            Record::On { recording, .. } if self.options.recorder.is_none() => {
+                self.status = match self.save_keyframes(&recording) {
+                    Ok(path) => format!("saved {path}"),
+                    Err(error) => format!("{error}"),
+                };
+            }
             Record::On { recording, size, .. } => {
                 let total = ((recording.duration() * self.options.record_fps).round() as usize).max(1);
                 let recorder = self.options.recorder.as_ref().expect("recording without a recorder");
@@ -800,13 +814,23 @@ impl App<'_> {
         }
     }
 
-    /// While recording, keep the view's state; while rendering, render the
-    /// video's next frames (the window then draws the live view again).
+    /// The recording's keyframes to the `keyframes` function: a list of (time, state dict).
+    fn save_keyframes(&self, recording: &Recording) -> PyResult<String> {
+        let py = self.py;
+        let save = self.options.keyframes.as_ref().expect("keyframes without a writer");
+        let samples: Vec<(f64, Py<pyo3::types::PyDict>)> =
+            recording.samples().iter().map(|(t, s)| s.to_dict(py).map(|d| (*t, d.unbind()))).collect::<PyResult<_>>()?;
+        save.call1(py, (samples,))?.extract(py)
+    }
+
+    /// While recording, keep the view's state whenever it changes; while
+    /// rendering, render the video's next frames (the window then draws the
+    /// live view again).
     fn record_step(&mut self) {
         match &mut self.record {
             Record::Off => {}
             Record::On { start, recording, .. } => {
-                recording.push(start.elapsed().as_secs_f64(), State::capture(self.viewer));
+                recording.push_change(start.elapsed().as_secs_f64(), State::capture(self.viewer));
             }
             Record::Rendering { .. } => {
                 if let Err(error) = self.render_frames() {
@@ -877,7 +901,7 @@ impl App<'_> {
         self.status = status;
     }
 
-    /// Copy the camera (or a button's text of it) to the clipboard, and print it.
+    /// Copy the view's state (or a button's text of the camera) to the clipboard, and print it.
     fn copy(&mut self, ctx: &egui::Context, which: Option<usize>) {
         match self.copy_text(which) {
             Ok(text) => {
@@ -890,13 +914,16 @@ impl App<'_> {
     }
 
     fn copy_text(&mut self, which: Option<usize>) -> PyResult<String> {
-        let camera = self.viewer.camera(self.py)?;
         match which {
             None => {
+                let state = State::capture(self.viewer).to_dict(self.py)?;
                 let json = self.py.import("json")?;
-                json.call_method1("dumps", (camera,))?.extract()
+                json.call_method1("dumps", (state,))?.extract()
             }
-            Some(index) => self.options.buttons[index].1.call1(self.py, (camera,))?.extract(self.py),
+            Some(index) => {
+                let camera = self.viewer.camera.to_dict(self.py)?;
+                self.options.buttons[index].1.call1(self.py, (camera,))?.extract(self.py)
+            }
         }
     }
 

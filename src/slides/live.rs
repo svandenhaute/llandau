@@ -19,13 +19,14 @@ use pyo3::types::PyDict;
 use super::paint::{Painter, letterbox};
 use super::timeline::Timeline;
 use crate::Viewer;
-use crate::camera::Camera;
 use crate::plots::{self, PLOTS_HEIGHT};
+use crate::recording::{Recording, State as ViewState};
 use crate::render::Gpu;
 use crate::window::{self, PLAY_INTERVAL, Scrub};
 
-/// How long the camera takes to move to a step's view.
-const CAMERA_MOVE: Duration = Duration::from_millis(900);
+/// How long the camera takes to move to a step's camera, on the step's clock
+/// (llandau.live.CAMERA_MOVE makes the step last that long).
+const CAMERA_MOVE: f64 = 0.9;
 const DOUBLE_CLICK: Duration = Duration::from_millis(350);
 /// How long a view takes to open up or close.
 const OPEN_MOVE: Duration = Duration::from_millis(300);
@@ -46,12 +47,12 @@ pub(crate) const KEYS: &[(&str, &str)] = &[
     ("drag", "rotate (right or Shift: pan)"),
     ("wheel", "scrub frames (pinch or Ctrl: zoom)"),
     ("+  −", "zoom in / out"),
-    ("0", "reset the camera (or double click)"),
+    ("0", "the step's view again (double click: the camera)"),
     ("click", "open up a grid's view, close it"),
     ("L", "lit / flat shading"),
     ("S", "atoms / protein (Shift: side chains)"),
     ("C", "next coloring"),
-    ("1 – 9", "layers"),
+    ("1 – 9", "layers"), // replaced by the view's layer names
     ("G", "large plots"),
     ("?", "these keys"),
     ("", "Slides"),
@@ -69,6 +70,8 @@ pub struct Entry {
     pub enter: Option<Py<PyAny>>,
     /// the camera to move to (a camera dict)
     pub camera: Option<Py<PyDict>>,
+    /// keyframes (seconds from the step's start, a state dict) played on the step's clock
+    pub play: Option<Vec<(f64, Py<PyDict>)>>,
 }
 
 struct Target {
@@ -81,7 +84,13 @@ struct Target {
 struct State {
     /// the live span entered last
     entered: Option<usize>,
-    camera_move: Option<(Instant, Camera, Camera)>,
+    /// what the step plays on its clock (the recording, from the span's start)
+    play: Option<(f64, Recording)>,
+    /// the timeline time the recording was last applied at: at the same time
+    /// again (paused), the presenter's turns are kept
+    applied: Option<f64>,
+    /// the step's view at its end: what 0 goes back to
+    home: Option<ViewState>,
     playing: bool,
     last_step: Option<Instant>,
 }
@@ -185,23 +194,42 @@ impl Lives {
             if let Some(enter) = &entry.enter {
                 enter.call1(py, (viewer,))?;
             }
-            if let Some(camera) = &entry.camera {
-                let mut v = viewer.borrow_mut();
-                let start = v.camera;
-                v.set_camera(camera.bind(py).clone())?;
-                let target = v.camera;
+            let mut v = viewer.borrow_mut();
+            let start = ViewState::capture(&v);
+            // what the step plays: its recording, or the move to its camera
+            let mut recording = None;
+            if let Some(frames) = &entry.play {
+                let mut rec = Recording::default();
+                let mut base = start.clone();
+                for (t, dict) in frames {
+                    let s = ViewState::from_dict(dict.bind(py), &base)?;
+                    rec.push(*t, s.clone());
+                    base = s;
+                }
+                recording = Some(rec);
+            } else if let Some(camera) = &entry.camera {
+                let mut target = start.clone();
+                target.camera.update(camera.bind(py))?;
                 if appearing {
-                    state.camera_move = None;
+                    target.apply(&mut v, &start);
                 } else {
-                    v.camera = start;
-                    state.camera_move = Some((Instant::now(), start, target));
+                    let mut rec = Recording::default();
+                    rec.push(0.0, start.clone());
+                    rec.push(CAMERA_MOVE, target);
+                    recording = Some(rec);
                 }
             }
+            state.home = Some(match &recording {
+                Some(rec) => rec.at(rec.duration()).unwrap_or_else(|| start.clone()),
+                None => ViewState::capture(&v),
+            });
+            state.play = recording.map(|rec| (timeline.lives[span].span[0], rec));
+            state.applied = None;
         }
         Ok(())
     }
 
-    /// Advance camera moves and playing trajectories; whether anything moves.
+    /// Advance playing trajectories; whether anything moves.
     pub fn animate(&mut self, py: Python<'_>) -> bool {
         let mut moving = false;
         for (index, state) in self.states.iter_mut().enumerate() {
@@ -209,14 +237,6 @@ impl Lives {
                 continue;
             }
             let mut v = self.viewers[index].bind(py).borrow_mut();
-            if let Some((started, from, to)) = state.camera_move {
-                let t = (started.elapsed().as_secs_f32() / CAMERA_MOVE.as_secs_f32()).min(1.0);
-                v.camera = from.lerp(&to, smooth(t));
-                if t >= 1.0 {
-                    state.camera_move = None;
-                }
-                moving = true;
-            }
             if state.playing {
                 if state.last_step.is_none_or(|t| t.elapsed() >= PLAY_INTERVAL) {
                     state.last_step = Some(Instant::now());
@@ -281,6 +301,19 @@ impl Lives {
                 }
             }
             // drawn at the size it has now: a picture of another aspect ratio would stretch
+            // the step's recording, at this moment of the timeline (once per moment: paused at
+            // its mark, the presenter's turns are kept)
+            let state = &mut self.states[live.viewer];
+            if let Some((start, recording)) = &state.play
+                && state.applied != Some(time)
+            {
+                let mut v = self.viewers[live.viewer].bind(py).borrow_mut();
+                let current = ViewState::capture(&v);
+                if let Some(wanted) = recording.at(time - start) {
+                    wanted.apply(&mut v, &current);
+                }
+                state.applied = Some(time);
+            }
             let rect = pixel_rect(timeline, size, now);
             let pixels = (rect[2].round().max(1.0) as u32, rect[3].round().max(1.0) as u32);
             if !matches!(&self.targets[live.viewer], Some(t) if t.size == pixels) {
@@ -314,12 +347,14 @@ impl Lives {
                 let x = v.plots.x(v.frame, v.num_frames(), v.scene.scrub_discrete);
                 let dark = v.theme() == "dark";
                 let overlay = self.overlay.get_or_insert_with(|| Overlay::new(gpu));
+                let rows = help_rows(&v);
+                let keys: Vec<(&str, &str)> = rows.iter().map(|(k, a)| (k.as_str(), a.as_str())).collect();
                 again |= overlay.draw(gpu, &target.view, pixels, dark, |ui| {
                     if plots {
                         v.plots.bottom_panel(ui, x);
                     }
                     if help {
-                        plots::help(ui, KEYS, 15.0);
+                        plots::help(ui, &keys, 15.0);
                     }
                 });
             }
@@ -359,7 +394,6 @@ impl Lives {
             .map(|t| t.size.1 as f32)
             .unwrap_or_else(|| pixel_rect(timeline, size, [0.0, 0.0, 1.0, 1.0])[3]);
         let mut v = self.viewers[viewer].bind(py).borrow_mut();
-        self.states[viewer].camera_move = None;
         if pan {
             v.pan(dx, dy, height);
         } else {
@@ -437,16 +471,37 @@ impl Lives {
         match key {
             "p" => state.playing = !state.playing,
             "?" => self.help = !self.help,
+            "0" => match &state.home {
+                // the step's view again, the camera included
+                Some(home) => {
+                    let current = ViewState::capture(&v);
+                    home.apply(&mut v, &current);
+                }
+                None => v.reset_camera(),
+            },
             _ => {
                 let Some(c) = key.chars().next().filter(|_| key.chars().count() == 1) else { return false };
-                if c == '0' {
-                    state.camera_move = None;
-                }
                 return window::view_key(&mut v, c, shift);
             }
         }
         true
     }
+}
+
+/// The keys shown over a live view: KEYS, with the view's layers by name.
+fn help_rows(v: &Viewer) -> Vec<(String, String)> {
+    let layers: Vec<String> = v.layers().into_iter().map(|(name, _)| name).collect();
+    KEYS.iter()
+        .filter_map(|(key, action)| match *key {
+            "1 – 9" if layers.is_empty() => None,
+            "1 – 9" => {
+                let n = layers.len().min(9);
+                let key = if n == 1 { "1".to_string() } else { format!("1 – {n}") };
+                Some((key, format!("layers: {}", layers[..n].join(", "))))
+            }
+            _ => Some((key.to_string(), action.to_string())),
+        })
+        .collect()
 }
 
 /// A frame rectangle (center, width, height) in pixels of a target of `size`:

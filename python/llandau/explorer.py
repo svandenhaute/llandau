@@ -16,13 +16,17 @@ To present: F (full screen), H (hide the panel) and G show the plots large
 under the view with readable axes. No Qt needed: the window is part of llandau
 (winit + egui).
 
-Record (or R) keeps what you do in the view; Stop renders it offscreen into an
-MP4 at a fixed frame rate, without the panel (needs ffmpeg: pip install
-'llandau[video]').
+Record (or R) keeps what you do in the view as keyframes of its state (the
+camera, the frame, every setting of the panel) in a JSON file, which a deck
+plays on a step with live(play="file.json"). Recording to an .mp4 renders a
+video offscreen instead, at a fixed frame rate, without the panel (needs
+ffmpeg: pip install 'llandau[video]'). Copy (or the copy state button) copies
+the view's state as a dict, for live(view=...).
 """
 from __future__ import annotations
 
 import itertools
+import json
 import time
 from pathlib import Path
 
@@ -49,6 +53,16 @@ def _recorder(path, fps):
     return start
 
 
+def _keyframes(path):
+    """The record button's keyframe writer: samples (time, state) -> the JSON file written,
+    by default llandau-<date>-<time>.json."""
+    def save(samples):
+        target = Path(path) if path is not None else Path(time.strftime("llandau-%Y%m%d-%H%M%S.json"))
+        target.write_text(json.dumps([{"t": t, **state} for t, state in samples], indent=1))
+        return str(target)
+    return save
+
+
 def explore(viewer, plots: dict | None = None, t=None, info: str | None = None,
             buttons: dict | None = None, title: str = "llandau", screenshot: str | None = None,
             record: str | None = None, record_size: tuple[int, int] | None = None, record_fps: float = 60):
@@ -60,17 +74,20 @@ def explore(viewer, plots: dict | None = None, t=None, info: str | None = None,
     info        a line of text above the controls
     buttons     label -> function of the camera dict returning text to copy (and print)
     screenshot  write one frame of the window to this PNG file and close (for tests)
-    record      the record button's video file (default: llandau-<date>-<time>.mp4)
-    record_size its size in pixels (default: the 3D view's), record_fps its frame rate
+    record      the record button's file: keyframes of the view's state as JSON (default:
+                llandau-<date>-<time>.json), or a video when it ends in .mp4
+    record_size the video's size in pixels (default: the 3D view's), record_fps its frame rate
     """
     if plots is not None or t is not None:
         viewer.set_plots(plots or {}, t)
+    video = record is not None and record.lower().endswith(".mp4")
     viewer.explore(
         info=info,
         buttons=list((buttons or {}).items()),
         title=title,
         screenshot=screenshot,
-        recorder=_recorder(record, record_fps),
+        recorder=_recorder(record, record_fps) if video else None,
         record_size=record_size,
         record_fps=record_fps,
+        keyframes=None if video else _keyframes(record),
     )

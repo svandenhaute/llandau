@@ -239,9 +239,11 @@ impl Viewer {
     /// (label, function of the camera dict returning text to copy); screenshot:
     /// write one frame of the window to this PNG file and close; recorder:
     /// function (width, height) -> video writer for the record button, which
-    /// renders record_size pixels (default: the 3D view's) at record_fps.
+    /// renders record_size pixels (default: the 3D view's) at record_fps;
+    /// keyframes: function (samples) -> path saving the record button's
+    /// keyframes instead (samples: list of (seconds, state dict)).
     #[pyo3(signature = (info = None, buttons = None, title = None, size = (1300.0, 800.0),
-                        screenshot = None, recorder = None, record_size = None, record_fps = 60.0))]
+                        screenshot = None, recorder = None, record_size = None, record_fps = 60.0, keyframes = None))]
     #[allow(clippy::too_many_arguments)]
     fn explore(
         &mut self,
@@ -254,6 +256,7 @@ impl Viewer {
         recorder: Option<Py<PyAny>>,
         record_size: Option<(u32, u32)>,
         record_fps: f64,
+        keyframes: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         if record_fps <= 0.0 {
             return Err(value_error("record_fps: must be positive"));
@@ -267,6 +270,7 @@ impl Viewer {
             recorder,
             record_size,
             record_fps,
+            keyframes,
         };
         window::explore(self, py, options)
     }
@@ -865,35 +869,28 @@ impl Viewer {
     /// The camera as a dict (target, distance, azimuth, elevation in degrees, fov in degrees).
     #[getter]
     fn camera<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let c = &self.camera;
-        let dict = PyDict::new(py);
-        dict.set_item("target", c.target.to_array())?;
-        dict.set_item("distance", c.distance)?;
-        dict.set_item("azimuth", c.azimuth.to_degrees())?;
-        dict.set_item("elevation", c.elevation.to_degrees())?;
-        dict.set_item("fov", c.fov_y.to_degrees())?;
-        Ok(dict)
+        self.camera.to_dict(py)
     }
 
     /// Set (some of) the camera, with the keys the `camera` getter returns.
     #[setter]
     fn set_camera(&mut self, values: Bound<'_, PyDict>) -> PyResult<()> {
-        let c = &mut self.camera;
-        if let Some(v) = values.get_item("target")? {
-            c.target = Vec3::from_array(v.extract()?);
-        }
-        if let Some(v) = values.get_item("distance")? {
-            c.distance = v.extract()?;
-        }
-        if let Some(v) = values.get_item("azimuth")? {
-            c.azimuth = v.extract::<f32>()?.to_radians();
-        }
-        if let Some(v) = values.get_item("elevation")? {
-            c.elevation = v.extract::<f32>()?.to_radians();
-        }
-        if let Some(v) = values.get_item("fov")? {
-            c.fov_y = v.extract::<f32>()?.to_radians();
-        }
+        self.camera.update(&values)
+    }
+
+    /// The whole view as a dict: everything the explorer's panel can change, the camera
+    /// included (see llandau.recording.State::KEYS). Set it with a full or partial dict:
+    /// entries left out keep their value. The explorer copies it, records it, a deck
+    /// applies and plays it.
+    #[getter]
+    fn state<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        recording::State::capture(self).to_dict(py)
+    }
+
+    #[setter]
+    fn set_state(&mut self, values: Bound<'_, PyDict>) -> PyResult<()> {
+        let current = recording::State::capture(self);
+        recording::State::from_dict(&values, &current)?.apply(self, &current);
         Ok(())
     }
 }

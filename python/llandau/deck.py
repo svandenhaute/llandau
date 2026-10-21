@@ -71,7 +71,7 @@ class Deck(Scene):
         return mobs[0] if len(mobs) == 1 else Group(*mobs)
 
     def live(self, scene: str, region: Region | None = None, still: bool = True, opens: Region | None = None,
-             **view):
+             state=None, play=None, **view):
         """The next step shows the 3D scene registered with @live_scene(scene) over region
         (default R.body), live and interactive in the player. Right after a reveal/step this only
         marks the upcoming step; otherwise it also ends the current one, so several calls in a row
@@ -79,6 +79,10 @@ class Deck(Scene):
 
         view     settings applied when the step starts (see llandau.live): camera, frame, style,
                  sidechains, shading, fog, occlusion, coloring, scrub_discrete, show, hide, plots
+        state    the whole view as the explorer copies it: a dict or a JSON file; the keywords
+                 override its entries. Its camera is moved to, like camera=.
+        play     keyframes the explorer recorded (a JSON file, or a list of dicts with "t"),
+                 played on the step's clock from the step's start; the step lasts at least as long
         still    also draw a still image of the view into the region (what exports show; the live
                  view covers it). Returned, e.g. to replace it later; None without.
         opens    a click on the view opens it up to this region (e.g. R.body), over the other
@@ -87,13 +91,20 @@ class Deck(Scene):
         _live.check(view)
         region = region if region is not None else R.body
         theme = "light" if self.theme.bg.to_rgb().mean() > 0.5 else "dark"
+        state = _live.load_state(state) if state is not None else None
+        play = _live.load_recording(play) if play is not None else None
         self.next_slide()  # no wait: no empty step
-        self._builder.live(self, scene, theme, region, view, opens)
+        self._builder.live(self, scene, theme, region, view, opens, state, play)
+        # the step lasts as long as what plays on its clock: a recording, or the move to a camera
+        if play:
+            self.wait(play[-1][0])
+        elif "camera" in view or (state and "camera" in state):
+            self.wait(_live.CAMERA_MOVE)
         if not still:
             return None
         pixels = (round(2 * config.pixel_width * region.width / config.frame_width),
                   round(2 * config.pixel_height * region.height / config.frame_height))
-        image = ImageMobject(_live.still(scene, theme, view, pixels))
+        image = ImageMobject(_live.still(scene, theme, view, pixels, state, play))
         place(image, region, fit="fill")
         self.add(image)
         return image

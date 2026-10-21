@@ -183,9 +183,11 @@ impl Slides {
     /// A live 3D view: `viewer` drawn over `rect` (center, width, height in
     /// frame units) from `start` until `end`, on top of the slide. When its
     /// step starts, `enter(viewer)` is called and the camera moves to `camera`
-    /// (a camera dict). With `opens` (another rectangle), a click on the view
-    /// grows it to that rectangle and a click puts it back. Not drawn by render().
-    #[pyo3(signature = (viewer, rect, start, end, enter = None, camera = None, opens = None))]
+    /// (a camera dict, moved to over the first 0.9 s of the step), or `play`
+    /// (keyframes: (seconds from `start`, state dict)) is played on the step's
+    /// clock. With `opens` (another rectangle), a click on the view grows it to
+    /// that rectangle and a click puts it back. Not drawn by render().
+    #[pyo3(signature = (viewer, rect, start, end, enter = None, camera = None, opens = None, play = None))]
     #[allow(clippy::too_many_arguments)]
     fn add_live(
         &mut self,
@@ -196,6 +198,7 @@ impl Slides {
         enter: Option<Py<PyAny>>,
         camera: Option<Py<PyDict>>,
         opens: Option<(f32, f32, f32, f32)>,
+        play: Option<Vec<(f64, Py<PyDict>)>>,
     ) -> usize {
         let viewer = self.lives.viewer_index(viewer);
         self.timeline.lives.push(LiveSpan {
@@ -204,7 +207,7 @@ impl Slides {
             span: [start, end],
             opens: opens.map(|r| [r.0, r.1, r.2, r.3]),
         });
-        self.lives.entries.push(Entry { enter, camera });
+        self.lives.entries.push(Entry { enter, camera, play });
         self.timeline.lives.len() - 1
     }
 

@@ -78,6 +78,40 @@ impl Camera {
     }
 
     /// Interpolate towards `other` (t in [0, 1]); angles take the short way around.
+    /// The camera as a dict: target, distance, azimuth and elevation (degrees), fov (degrees).
+    pub fn to_dict<'py>(&self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
+        use pyo3::types::PyDictMethods;
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("target", self.target.to_array())?;
+        dict.set_item("distance", self.distance)?;
+        dict.set_item("azimuth", self.azimuth.to_degrees())?;
+        dict.set_item("elevation", self.elevation.to_degrees())?;
+        dict.set_item("fov", self.fov_y.to_degrees())?;
+        Ok(dict)
+    }
+
+    /// Set the entries a camera dict has.
+    pub fn update(&mut self, values: &pyo3::Bound<'_, pyo3::types::PyDict>) -> pyo3::PyResult<()> {
+        use pyo3::types::PyDictMethods;
+        use pyo3::types::PyAnyMethods;
+        if let Some(v) = values.get_item("target")? {
+            self.target = Vec3::from_array(v.extract()?);
+        }
+        if let Some(v) = values.get_item("distance")? {
+            self.distance = v.extract()?;
+        }
+        if let Some(v) = values.get_item("azimuth")? {
+            self.azimuth = v.extract::<f32>()?.to_radians();
+        }
+        if let Some(v) = values.get_item("elevation")? {
+            self.elevation = v.extract::<f32>()?.to_radians();
+        }
+        if let Some(v) = values.get_item("fov")? {
+            self.fov_y = v.extract::<f32>()?.to_radians();
+        }
+        Ok(())
+    }
+
     pub fn lerp(&self, other: &Camera, t: f32) -> Camera {
         let tau = std::f32::consts::TAU;
         let mut azimuth = (other.azimuth - self.azimuth) % tau;

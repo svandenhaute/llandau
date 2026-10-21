@@ -278,3 +278,38 @@ def test_fade_blends_with_prior_content():
     center = lambda t: int(deck.render(t, 320, 180)[90, 160, :3].mean())  # noqa: E731
     assert center(0.0) < 10 and center(1.0) > 245 and center(2.0) < 10
     assert 80 < center(0.5) < 180 and 80 < center(1.5) < 180, (center(0.5), center(1.5))
+
+
+def test_live_state_and_play_set_the_step():
+    """A state dict applies at the step; a camera or a recording plays on the step's clock,
+    which lasts long enough for it."""
+    from llandau import live_scene
+    from llandau.live import load_recording, load_state, CAMERA_MOVE
+
+    @live_scene("atom")
+    def atom(viewer):
+        viewer.load(np.zeros((4, 1, 3), np.float32), np.array([6]))
+
+    keyframes = [{"t": 0.0, "frame": 0, "fog": 0.0, "theme": "dark"}, {"t": 2.0, "frame": 3, "fog": 1.0}]
+    assert load_recording(keyframes) == [(0.0, {"frame": 0, "fog": 0.0}), (2.0, {"frame": 3, "fog": 1.0})]
+    assert load_state({"theme": "dark", "fog": 0.3}) == {"fog": 0.3}
+    with pytest.raises(ValueError):
+        load_recording([{"t": 1.0}, {"t": 0.5}])
+
+    class Played(Deck):
+        theme = LIGHT
+
+        def construct(self):
+            self.live("atom", R.body.left, still=False, play=keyframes)
+            self.reveal(text("played"))
+            self.live("atom", R.body.left, still=False, state={"fog": 0.5, "camera": {"azimuth": 10}})
+            self.reveal(text("moved"))
+            self.live("atom", R.body.left, still=False, frame=2)
+            self.reveal(text("set"))
+
+    deck = build([Played])
+    marks = [t for t, _, _ in deck.marks]
+    assert marks[0] >= 2.0  # the recording's 2 s, then the reveal
+    assert marks[1] - marks[0] >= CAMERA_MOVE  # the move to the state's camera
+    assert marks[2] - marks[1] < CAMERA_MOVE  # a frame is set at once
+    assert deck.num_lives == 3

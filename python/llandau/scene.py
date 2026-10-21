@@ -307,12 +307,15 @@ class _Builder:
 
     def mark(self, t: float, slide: int, notes: str):
         self.slides.add_mark(t, slide, notes)
-        for viewer, rect, start, enter, camera, opens in self.pending_lives:
-            self.slides.add_live(viewer, rect, start, t, enter, camera, opens)
+        for viewer, rect, start, enter, camera, opens, play in self.pending_lives:
+            self.slides.add_live(viewer, rect, start, t, enter, camera, opens, play)
         self.pending_lives = []
 
-    def live(self, scene, name: str, theme: str, region, view: dict, opens=None):
-        """Show live scene `name` over `region` until the next mark; a click opens it up to `opens`."""
+    def live(self, scene, name: str, theme: str, region, view: dict, opens=None, state: dict | None = None,
+             play: list | None = None):
+        """Show live scene `name` over `region` until the next mark: `state` (a state dict) then
+        `view` (keywords) applied as it starts, `play` (keyframes) played on the step's clock;
+        a click opens it up to `opens`."""
         from . import live
         viewer = self.viewers.get((name, theme))
         if viewer is None:
@@ -320,9 +323,16 @@ class _Builder:
             viewer = self.viewers[(name, theme)] = Viewer(theme=theme)
             live.build(viewer, name)
         rect = lambda r: ((r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2, r.width, r.height)  # noqa: E731
-        enter = lambda v, view=dict(view): live.apply_view(v, view, camera=False)  # noqa: E731
-        self.pending_lives.append((viewer, rect(region), scene.time, enter, view.get("camera"),
-                                   rect(opens) if opens is not None else None))
+        state = dict(state or {})
+        camera = view.get("camera", state.pop("camera", None))  # the camera moves there: not set at once
+
+        def enter(v, view=dict(view), state=state):
+            if state:
+                v.state = state
+            live.apply_view(v, view, camera=False)
+
+        self.pending_lives.append((viewer, rect(region), scene.time, enter, camera,
+                                   rect(opens) if opens is not None else None, play))
 
 
 class Scene:
