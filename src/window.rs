@@ -387,6 +387,34 @@ impl App<'_> {
         }
         let Some(mut target) = self.surface.take() else { return };
         let window = target.surface.window.clone();
+        let size = target.surface.size();
+        let format = target.surface.config.format;
+        let gpu = self.viewer.gpu.clone();
+        // the frame to draw, before egui runs: its output (the font atlas, the first
+        // time) must reach the renderer, so a frame without a surface is drawn later
+        let screenshot = if self.frames_drawn >= 2 { self.options.screenshot.take() } else { None };
+        let mut offscreen = None;
+        let surface_texture = match &screenshot {
+            // the screenshot frame goes to an offscreen copy of the window instead
+            Some(_) => {
+                offscreen = Some(Offscreen::with_format(&gpu.device, size, format));
+                None
+            }
+            None => match target.surface.acquire(&gpu.device) {
+                Some(texture) => Some(texture),
+                None => {
+                    window.request_redraw();
+                    self.surface = Some(target);
+                    return;
+                }
+            },
+        };
+        let view = match (&surface_texture, &offscreen) {
+            (Some(texture), _) => texture.texture.create_view(&Default::default()),
+            (None, Some(offscreen)) => offscreen.view().clone(),
+            _ => unreachable!(),
+        };
+
         let raw_input = target.egui_state.take_egui_input(&window);
         let egui = self.egui.clone();
         let output = egui.run_ui(raw_input, |ui| self.ui(ui));
@@ -410,31 +438,6 @@ impl App<'_> {
             self.viewport.width() * ppp,
             self.viewport.height() * ppp,
         ];
-
-        // the screenshot frame goes to an offscreen copy of the window instead
-        let screenshot = if self.frames_drawn >= 2 { self.options.screenshot.take() } else { None };
-        let size = target.surface.size();
-        let format = target.surface.config.format;
-        let gpu = self.viewer.gpu.clone();
-        let mut offscreen = None;
-        let surface_texture = match &screenshot {
-            Some(_) => {
-                offscreen = Some(Offscreen::with_format(&gpu.device, size, format));
-                None
-            }
-            None => match target.surface.acquire(&gpu.device) {
-                Some(texture) => Some(texture),
-                None => {
-                    self.surface = Some(target);
-                    return;
-                }
-            },
-        };
-        let view = match (&surface_texture, &offscreen) {
-            (Some(texture), _) => texture.texture.create_view(&Default::default()),
-            (None, Some(offscreen)) => offscreen.view().clone(),
-            _ => unreachable!(),
-        };
 
         self.viewer.draw_into(&view, format, size, Some(viewport));
         let settling = paint_egui(&mut target.egui_renderer, &gpu, &egui, output, &view, size);
