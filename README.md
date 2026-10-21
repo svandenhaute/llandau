@@ -35,7 +35,7 @@ page per step.
 
 ## Geometric models
 
-![trp-cage's NMR models playing in a wgpu view: all atoms in flat shading, then the protein tube and side chains, lit](https://raw.githubusercontent.com/svandenhaute/llandau/main/docs/protein.gif)
+![trp-cage's NMR models playing in a wgpu view: all atoms in flat shading, then the protein tube and side chains, lit](https://raw.githubusercontent.com/svandenhaute/llandau/main/docs/models.gif)
 
 ```python
 viewer = Viewer().load(positions, numbers, roles=roles)    # (frames, atoms, 3), (atoms,)
