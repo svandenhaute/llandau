@@ -246,9 +246,9 @@ def layered_svg(
     """One mobject per reveal step of an Inkscape SVG, already positioned (Group of steps).
 
     mode        "raster": each step rendered to PNG (full fidelity: text, filters, embedded images);
-                "vector": SVGMobject submobjects (crisp, animatable): text, clones, markers and clip
-                paths are flattened; no filters or embedded images. Paths entirely off the page are
-                dropped, as a viewer would clip them
+                "vector": SVGMobject submobjects (crisp, animatable): text, clones and markers are
+                flattened and rectangular clip paths applied (others are ignored); no filters or
+                embedded images. Paths entirely off the page are dropped, as a viewer would clip them
     order       "label" (number in layer name) or "document" (stacking order)
     layers      optional subset: indices (after filtering), labels or ids
     accumulate  True: layers build up; False: each step shows only its own layers
