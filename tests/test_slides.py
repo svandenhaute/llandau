@@ -179,6 +179,27 @@ def test_live_view_spans_its_step():
     assert len(deck.marks) == 3
 
 
+def test_live_grid_opens():
+    """Several live views on one step, each opening up to the body on a click."""
+    from llandau import live_scene
+
+    for k in range(4):
+        @live_scene(f"cell{k}")
+        def cell(viewer, k=k):
+            viewer.load(np.zeros((1, 1, 3), np.float32), np.array([6 + k]))
+
+    class Grid(Deck):
+        theme = LIGHT
+
+        def construct(self):
+            for k, region in enumerate(R.body.grid(2, 2, gap=0.2)):
+                self.live(f"cell{k}", region, still=False, opens=R.body)
+            self.reveal(text("after"))
+
+    deck = build([Grid])
+    assert len(deck.marks) == 1 and deck.num_lives == 4  # the views and the text share the first step
+
+
 def test_layer_step_keys():
     """Labels order as number then letter: 1 < 1a < 1b < 2 < 10 < 11, and "11" is not a sub-step of 1."""
     from llandau.media import step_key, _steps, Layer

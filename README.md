@@ -51,4 +51,6 @@ explore(viewer, plots={"rmsd": rmsd}, t=t)                 # a window; ? shows e
 A model is drawn with wgpu, and the window is interactive: drag to turn, scroll through the frames, and every setting has a
 key (lit or flat shading, protein or atoms, layers, a light or dark theme); R records what you
 do into an MP4. A deck shows the same viewer live inside a slide, just as interactive, with
-`self.live("name", R.body.right, camera={"azimuth": 30}, frame=60)`.
+`self.live("name", R.body.right, camera={"azimuth": 30}, frame=60)`. Several views fit on one step,
+e.g. one per cell of `R.body.grid(2, 5)`, and with `opens=R.body` a click opens a view up for a closer
+look (`examples/grid.py`).

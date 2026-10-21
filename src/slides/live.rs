@@ -6,6 +6,10 @@
 //! frames, pinch or ctrl + wheel zooms, a double click resets the camera. The
 //! shown view also takes keys (KEYS, which ? shows over it): G shows the
 //! viewer's plots large under its 3D view, readable on a projector.
+//!
+//! A view with an `opens` rectangle (a cell of a grid) opens up to it on a
+//! click, drawn over the others and taking the keys, and closes on the next
+//! click (a drag still turns it; the double click is then not special).
 
 use std::time::{Duration, Instant};
 
@@ -23,6 +27,10 @@ use crate::window::{self, PLAY_INTERVAL, Scrub};
 /// How long the camera takes to move to a step's view.
 const CAMERA_MOVE: Duration = Duration::from_millis(900);
 const DOUBLE_CLICK: Duration = Duration::from_millis(350);
+/// How long a view takes to open up or close.
+const OPEN_MOVE: Duration = Duration::from_millis(300);
+/// A press and release this close (pixels) is a click, not a drag.
+const CLICK_SLOP: f64 = 4.0;
 /// The picture's format: drawn sRGB-encoded, sampled as written.
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// The overlay's scale: a live view is this many points high (text sizes are in points).
@@ -39,6 +47,7 @@ pub(crate) const KEYS: &[(&str, &str)] = &[
     ("wheel", "scrub frames (pinch or Ctrl: zoom)"),
     ("+  −", "zoom in / out"),
     ("0", "reset the camera (or double click)"),
+    ("click", "open up a grid's view, close it"),
     ("L", "lit / flat shading"),
     ("S", "atoms / protein (Shift: side chains)"),
     ("C", "next coloring"),
@@ -77,6 +86,13 @@ struct State {
     last_step: Option<Instant>,
 }
 
+/// A live span opening up to its `opens` rectangle, or closing again.
+struct Open {
+    span: usize,
+    since: Instant,
+    opening: bool,
+}
+
 #[derive(Default)]
 pub struct Lives {
     pub viewers: Vec<Py<Viewer>>,
@@ -88,6 +104,9 @@ pub struct Lives {
     /// (viewer, button) being dragged, and the last cursor position
     drag: Option<(usize, bool)>,
     cursor: (f64, f64),
+    /// the span pressed with the left button, and where: a release nearby is a click
+    press: Option<(usize, (f64, f64))>,
+    open: Option<Open>,
     last_click: Option<Instant>,
     scrub: Scrub,
     /// the keys shown over the focused view
@@ -122,6 +141,10 @@ fn smooth(t: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+fn lerp_rect(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+    std::array::from_fn(|i| a[i] + t * (b[i] - a[i]))
+}
+
 impl Lives {
     /// The index of `viewer`, added if new.
     pub fn viewer_index(&mut self, viewer: Py<Viewer>) -> usize {
@@ -139,6 +162,9 @@ impl Lives {
     pub fn enter(&mut self, py: Python<'_>, timeline: &Timeline, time: f64) -> PyResult<()> {
         let active: Vec<usize> = timeline.live_at(time).collect();
         let shown: Vec<usize> = active.iter().map(|&i| timeline.lives[i].viewer).collect();
+        if self.open.as_ref().is_some_and(|o| !active.contains(&o.span)) {
+            self.open = None; // its step is over
+        }
         // views no longer shown start afresh next time
         for (viewer, state) in self.states.iter_mut().enumerate() {
             if !shown.contains(&viewer) {
@@ -204,15 +230,57 @@ impl Lives {
         moving
     }
 
+    /// Where a span is drawn now, the rectangle it is heading for (its picture
+    /// is drawn at that size), and whether it is still moving.
+    fn placement(&self, timeline: &Timeline, span: usize) -> ([f32; 4], [f32; 4], bool) {
+        let live = timeline.lives[span];
+        match (&self.open, live.opens) {
+            (Some(open), Some(big)) if open.span == span => {
+                let t = smooth((open.since.elapsed().as_secs_f32() / OPEN_MOVE.as_secs_f32()).min(1.0));
+                let (from, to) = if open.opening { (live.rect, big) } else { (big, live.rect) };
+                (lerp_rect(from, to, t), to, t < 1.0)
+            }
+            _ => (live.rect, live.rect, false),
+        }
+    }
+
+    /// Open span `span` up, or close it when it is open.
+    fn toggle(&mut self, span: usize) {
+        let now = Instant::now();
+        self.open = match self.open.take() {
+            Some(open) if open.span == span => {
+                // reverse from where it is
+                let elapsed = open.since.elapsed().min(OPEN_MOVE);
+                Some(Open { span, since: now - (OPEN_MOVE - elapsed), opening: !open.opening })
+            }
+            _ => Some(Open { span, since: now, opening: true }),
+        };
+    }
+
     /// Draw the live views shown at `time` into their pictures, at the pixel
     /// size their regions have in a target of `size`; whether to draw again soon
-    /// (an overlay settling).
+    /// (an overlay settling, a view opening up).
     pub fn draw(&mut self, py: Python<'_>, gpu: &Gpu, painter: &mut Painter, timeline: &Timeline, time: f64, size: (u32, u32)) -> bool {
         let focused = self.focused(timeline, time);
         let mut again = false;
+        painter.live_top = None;
         for span in timeline.live_at(time).collect::<Vec<_>>() {
             let live = timeline.lives[span];
-            let rect = pixel_rect(timeline, size, live.rect);
+            let (now, heading, moving) = self.placement(timeline, span);
+            again |= moving;
+            if now == live.rect {
+                painter.live_rects.remove(&live.viewer);
+            } else {
+                painter.live_rects.insert(live.viewer, now);
+            }
+            if self.open.as_ref().is_some_and(|o| o.span == span) {
+                if moving || self.open.as_ref().unwrap().opening {
+                    painter.live_top = Some(live.viewer);
+                } else {
+                    self.open = None; // closed
+                }
+            }
+            let rect = pixel_rect(timeline, size, heading);
             let pixels = (rect[2].round().max(1.0) as u32, rect[3].round().max(1.0) as u32);
             if !matches!(&self.targets[live.viewer], Some(t) if t.size == pixels) {
                 let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
@@ -258,18 +326,26 @@ impl Lives {
         again
     }
 
-    /// The live view under the cursor at `time` (the topmost), and its pixel rectangle.
-    fn under(&self, timeline: &Timeline, time: f64, size: (u32, u32), at: (f64, f64)) -> Option<(usize, [f32; 4])> {
-        timeline.live_at(time).rev().find_map(|span| {
-            let live = timeline.lives[span];
-            let r = pixel_rect(timeline, size, live.rect);
+    /// The live span under the cursor at `time` (the open one first, then the
+    /// topmost), its viewer and its pixel rectangle.
+    fn under(&self, timeline: &Timeline, time: f64, size: (u32, u32), at: (f64, f64)) -> Option<(usize, usize, [f32; 4])> {
+        let open = self.open.as_ref().map(|o| o.span).filter(|&s| timeline.live_at(time).any(|a| a == s));
+        let rest = timeline.live_at(time).rev().filter(|&s| Some(s) != open);
+        open.into_iter().chain(rest).find_map(|span| {
+            let (now, _, _) = self.placement(timeline, span);
+            let r = pixel_rect(timeline, size, now);
             let (x, y) = (at.0 as f32, at.1 as f32);
-            (x >= r[0] && x <= r[0] + r[2] && y >= r[1] && y <= r[1] + r[3]).then_some((live.viewer, r))
+            (x >= r[0] && x <= r[0] + r[2] && y >= r[1] && y <= r[1] + r[3]).then_some((span, timeline.lives[span].viewer, r))
         })
     }
 
-    /// The live view keys go to: the topmost one shown.
+    /// The live view keys go to: the open one, else the topmost one shown.
     fn focused(&self, timeline: &Timeline, time: f64) -> Option<usize> {
+        if let Some(open) = &self.open
+            && timeline.live_at(time).any(|s| s == open.span)
+        {
+            return Some(timeline.lives[open.span].viewer);
+        }
         timeline.live_at(time).last().map(|span| timeline.lives[span].viewer)
     }
 
@@ -303,10 +379,21 @@ impl Lives {
         shift: bool,
     ) -> bool {
         if !pressed {
-            return self.drag.take().is_some();
+            let dragged = self.drag.take().is_some();
+            if let Some((span, at)) = self.press.take() {
+                let moved = (self.cursor.0 - at.0).abs().max((self.cursor.1 - at.1).abs()) > CLICK_SLOP;
+                if !moved {
+                    self.toggle(span);
+                    return true;
+                }
+            }
+            return dragged;
         }
-        let Some((viewer, _)) = self.under(timeline, time, size, self.cursor) else { return false };
-        if !right {
+        let Some((span, viewer, _)) = self.under(timeline, time, size, self.cursor) else { return false };
+        let opens = timeline.lives[span].opens.is_some();
+        if !right && opens {
+            self.press = Some((span, self.cursor));
+        } else if !right {
             let now = Instant::now();
             if self.last_click.is_some_and(|t| now - t < DOUBLE_CLICK) {
                 self.viewers[viewer].bind(py).borrow_mut().reset_camera();
@@ -321,7 +408,7 @@ impl Lives {
 
     /// Scrolling over a live view: frames (or zoom, with ctrl). True when taken.
     pub fn scroll(&mut self, py: Python<'_>, timeline: &Timeline, time: f64, size: (u32, u32), points: f32, zoom: bool) -> bool {
-        let Some((viewer, _)) = self.under(timeline, time, size, self.cursor) else { return false };
+        let Some((_, viewer, _)) = self.under(timeline, time, size, self.cursor) else { return false };
         let mut v = self.viewers[viewer].bind(py).borrow_mut();
         if zoom {
             v.zoom((-points * 0.004).exp());
@@ -336,7 +423,7 @@ impl Lives {
 
     /// Pinching over a live view zooms. True when taken.
     pub fn pinch(&mut self, py: Python<'_>, timeline: &Timeline, time: f64, size: (u32, u32), delta: f64) -> bool {
-        let Some((viewer, _)) = self.under(timeline, time, size, self.cursor) else { return false };
+        let Some((_, viewer, _)) = self.under(timeline, time, size, self.cursor) else { return false };
         self.viewers[viewer].bind(py).borrow_mut().zoom(1.0 / (1.0 + delta as f32).max(0.1));
         true
     }
@@ -370,4 +457,55 @@ pub fn pixel_rect(timeline: &Timeline, size: (u32, u32), rect: [f32; 4]) -> [f32
     let left = vx + (cx - w / 2.0 + fw / 2.0) / fw * vw;
     let top = vy + (fh / 2.0 - (cy + h / 2.0)) / fh * vh;
     [left, top, w / fw * vw, h / fh * vh]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::slides::timeline::LiveSpan;
+
+    fn grid() -> Timeline {
+        let mut timeline = Timeline { frame: [16.0, 9.0], ..Default::default() };
+        for (k, cx) in [-4.0, 0.0, 4.0].into_iter().enumerate() {
+            timeline.lives.push(LiveSpan { viewer: k, rect: [cx, 0.0, 3.0, 2.0], span: [0.0, 10.0], opens: Some([0.0, 0.0, 12.0, 8.0]) });
+        }
+        timeline
+    }
+
+    #[test]
+    fn a_click_opens_a_cell_and_the_next_closes_it() {
+        let timeline = grid();
+        let mut lives = Lives::default();
+        let size = (1600, 900);
+        // the middle cell is under the frame's center; the left one is not
+        assert_eq!(lives.under(&timeline, 1.0, size, (800.0, 450.0)).map(|u| u.0), Some(1));
+        assert_eq!(lives.under(&timeline, 1.0, size, (400.0, 450.0)).map(|u| u.0), Some(0));
+        lives.toggle(0);
+        let (now, heading, moving) = lives.placement(&timeline, 0);
+        assert!(moving && heading == [0.0, 0.0, 12.0, 8.0]);
+        assert!(now[2] >= 3.0 && now[2] <= 12.0);
+        // the open cell is found first, even where it overlaps the others
+        lives.open.as_mut().unwrap().since = Instant::now() - OPEN_MOVE;
+        assert_eq!(lives.under(&timeline, 1.0, size, (800.0, 450.0)).map(|u| u.0), Some(0));
+        assert_eq!(lives.focused(&timeline, 1.0), Some(0));
+        let (now, _, moving) = lives.placement(&timeline, 0);
+        assert!(!moving && now == [0.0, 0.0, 12.0, 8.0]);
+        lives.toggle(0);
+        assert!(!lives.open.as_ref().unwrap().opening);
+        lives.open.as_mut().unwrap().since = Instant::now() - OPEN_MOVE;
+        let (now, heading, moving) = lives.placement(&timeline, 0);
+        assert!(!moving && now == [-4.0, 0.0, 3.0, 2.0] && heading == now);
+        // a view whose step ended is closed
+        lives.toggle(2);
+        let mut later = grid();
+        later.lives[2].span = [0.0, 0.5];
+        assert!(lives.open.is_some());
+        let active: Vec<usize> = later.live_at(1.0).collect();
+        assert!(!active.contains(&2));
+    }
+
+    #[test]
+    fn rect_interpolation() {
+        assert_eq!(lerp_rect([0.0, 0.0, 2.0, 2.0], [4.0, 4.0, 6.0, 6.0], 0.5), [2.0, 2.0, 4.0, 4.0]);
+    }
 }

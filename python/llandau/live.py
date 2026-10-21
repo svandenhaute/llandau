@@ -26,6 +26,13 @@ In the player: drag rotates, right drag pans, the wheel scrubs frames, pinch or
 ctrl + wheel zooms, a double click resets the camera; ? over the view shows
 every key (the explorer's, with the arrows still changing steps). Exported
 (llandau pdf), a live step shows a still image of its 3D view (without plots).
+
+Several views on one step: call live() once per region. With opens=R.body a
+click on a view opens it up to the body over the others (a grid of molecules,
+each opening for a closer look) and the next click closes it:
+
+    for name, cell in zip(names, R.body.grid(2, 5, gap=0.2)):
+        self.live(name, cell, opens=R.body)
 """
 from __future__ import annotations
 

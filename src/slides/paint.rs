@@ -101,6 +101,10 @@ pub struct Painter {
     images: Vec<wgpu::BindGroup>,
     /// live views' pictures, by viewer
     live: HashMap<usize, wgpu::BindGroup>,
+    /// where live views are drawn instead of their span's rectangle (one opening up), by viewer
+    pub live_rects: HashMap<usize, [f32; 4]>,
+    /// the live view drawn over the other ones (the open one)
+    pub live_top: Option<usize>,
     targets: Option<Targets>,
     /// tessellations of unchanged shapes, by shape id, at `cache_tolerance`
     cache: HashMap<usize, Mesh>,
@@ -241,6 +245,8 @@ impl Painter {
             sampler,
             images: Vec::new(),
             live: HashMap::new(),
+            live_rects: HashMap::new(),
+            live_top: None,
             targets: None,
             cache: HashMap::new(),
             cache_tolerance: 0.0,
@@ -399,6 +405,7 @@ impl Painter {
         let mut used = std::collections::HashSet::new();
         // the open layer run: (layer, opacity, first index)
         let mut open: Option<(usize, f32, u32)> = None;
+        let mut top: Option<Command> = None; // the open live view: drawn last
         let whole = [0.0, 0.0, timeline.frame[0], timeline.frame[1]];
         let close = |open: &mut Option<(usize, f32, u32)>, end: u32, quads: &mut Vec<ImageVertex>, commands: &mut Vec<Command>| {
             if let Some((_, opacity, start)) = open.take() {
@@ -447,13 +454,19 @@ impl Painter {
                 }
                 Item::Live { viewer, rect } => {
                     if self.live.contains_key(&viewer) {
+                        let rect = self.live_rects.get(&viewer).copied().unwrap_or(rect);
                         let first = quad(&mut image_vertices, rect, 1.0);
-                        commands.push(Command::Live { viewer, first });
+                        if self.live_top == Some(viewer) {
+                            top = Some(Command::Live { viewer, first });
+                        } else {
+                            commands.push(Command::Live { viewer, first });
+                        }
                     }
                 }
             }
         }
         close(&mut open, mesh.indices.len() as u32, &mut image_vertices, &mut commands);
+        commands.extend(top);
         self.cache.retain(|id, _| used.contains(id));
         if commands.iter().any(|c| matches!(c, Command::Layer { .. })) {
             self.ensure_targets(device, inner, true);

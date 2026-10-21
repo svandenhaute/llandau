@@ -70,21 +70,25 @@ class Deck(Scene):
             self.step(notes)
         return mobs[0] if len(mobs) == 1 else Group(*mobs)
 
-    def live(self, scene: str, region: Region | None = None, still: bool = True, **view):
+    def live(self, scene: str, region: Region | None = None, still: bool = True, opens: Region | None = None,
+             **view):
         """The next step shows the 3D scene registered with @live_scene(scene) over region
         (default R.body), live and interactive in the player. Right after a reveal/step this only
-        marks the upcoming step; otherwise it also ends the current one.
+        marks the upcoming step; otherwise it also ends the current one, so several calls in a row
+        put several views on one step (a grid: one call per cell of R.body.grid(2, 5, gap=0.2)).
 
         view     settings applied when the step starts (see llandau.live): camera, frame, style,
                  sidechains, shading, fog, occlusion, coloring, scrub_discrete, show, hide, plots
         still    also draw a still image of the view into the region (what exports show; the live
                  view covers it). Returned, e.g. to replace it later; None without.
+        opens    a click on the view opens it up to this region (e.g. R.body), over the other
+                 views; the next click closes it. A drag still turns it.
         """
         _live.check(view)
         region = region if region is not None else R.body
         theme = "light" if self.theme.bg.to_rgb().mean() > 0.5 else "dark"
         self.next_slide()  # no wait: no empty step
-        self._builder.live(self, scene, theme, region, view)
+        self._builder.live(self, scene, theme, region, view, opens)
         if not still:
             return None
         pixels = (round(2 * config.pixel_width * region.width / config.frame_width),

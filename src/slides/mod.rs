@@ -183,8 +183,9 @@ impl Slides {
     /// A live 3D view: `viewer` drawn over `rect` (center, width, height in
     /// frame units) from `start` until `end`, on top of the slide. When its
     /// step starts, `enter(viewer)` is called and the camera moves to `camera`
-    /// (a camera dict). Not drawn by render().
-    #[pyo3(signature = (viewer, rect, start, end, enter = None, camera = None))]
+    /// (a camera dict). With `opens` (another rectangle), a click on the view
+    /// grows it to that rectangle and a click puts it back. Not drawn by render().
+    #[pyo3(signature = (viewer, rect, start, end, enter = None, camera = None, opens = None))]
     #[allow(clippy::too_many_arguments)]
     fn add_live(
         &mut self,
@@ -194,9 +195,15 @@ impl Slides {
         end: f64,
         enter: Option<Py<PyAny>>,
         camera: Option<Py<PyDict>>,
+        opens: Option<(f32, f32, f32, f32)>,
     ) -> usize {
         let viewer = self.lives.viewer_index(viewer);
-        self.timeline.lives.push(LiveSpan { viewer, rect: [rect.0, rect.1, rect.2, rect.3], span: [start, end] });
+        self.timeline.lives.push(LiveSpan {
+            viewer,
+            rect: [rect.0, rect.1, rect.2, rect.3],
+            span: [start, end],
+            opens: opens.map(|r| [r.0, r.1, r.2, r.3]),
+        });
         self.lives.entries.push(Entry { enter, camera });
         self.timeline.lives.len() - 1
     }
@@ -227,6 +234,11 @@ impl Slides {
     #[getter]
     fn num_clips(&self) -> usize {
         self.timeline.clips.len()
+    }
+
+    #[getter]
+    fn num_lives(&self) -> usize {
+        self.timeline.lives.len()
     }
 
     /// The deck at `time` as an RGBA image ((height, width, 4) uint8).

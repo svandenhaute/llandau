@@ -140,12 +140,15 @@ impl Rate {
 }
 
 /// A live 3D view: viewer `viewer`'s picture over `rect` (center, width,
-/// height in frame units) during `span`, on top of everything.
+/// height in frame units) during `span`, on top of everything. With `opens`,
+/// a click grows the view to that rectangle (a cell of a grid opening up) and
+/// another click puts it back.
 #[derive(Clone, Copy, Debug)]
 pub struct LiveSpan {
     pub viewer: usize,
     pub rect: [f32; 4],
     pub span: [f64; 2],
+    pub opens: Option<[f32; 4]>,
 }
 
 /// One step of the presentation: it ends at `time`, where the player pauses.
