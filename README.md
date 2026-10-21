@@ -1,6 +1,6 @@
 # llandau
 
-Scientific slides drawn live, with interactive 3D trajectories inside them. A deck is
+Scientific slides drawn live, with interactive geometric models inside them. A deck is
 written like a [manim](https://www.manim.community) scene and plays straight from the
 code (wgpu): no videos, no render step. Everything on screen is live while you present:
 step back, scrub, turn a molecule, change its rendering. The same plots save as paper
@@ -33,9 +33,9 @@ SLIDES = order(Results)
 scrubs through every animation, F goes full screen. `llandau pdf` and `llandau png` export one
 page per step.
 
-## 3D trajectories
+## Geometric models
 
-![trp-cage's NMR models playing: all atoms in flat shading, then the protein tube and side chains, lit](https://raw.githubusercontent.com/svandenhaute/llandau/main/docs/protein.gif)
+![trp-cage's NMR models playing in a wgpu view: all atoms in flat shading, then the protein tube and side chains, lit](https://raw.githubusercontent.com/svandenhaute/llandau/main/docs/protein.gif)
 
 ```python
 viewer = Viewer().load(positions, numbers, roles=roles)    # (frames, atoms, 3), (atoms,)
@@ -47,7 +47,7 @@ explore(viewer, plots={"rmsd": rmsd}, t=t)                 # a window; ? shows e
 
 `python examples/protein.py` is this, on trp-cage's NMR models from the PDB.
 
-The window is interactive: drag to turn, scroll through the frames, and every setting has a
+A model is drawn with wgpu, and the window is interactive: drag to turn, scroll through the frames, and every setting has a
 key (lit or flat shading, protein or atoms, layers, a light or dark theme); R records what you
 do into an MP4. A deck shows the same viewer live inside a slide, just as interactive, with
 `self.live("name", R.body.right, camera={"azimuth": 30}, frame=60)`.
