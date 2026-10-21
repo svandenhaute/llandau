@@ -11,8 +11,9 @@
 //! click, drawn over the others and taking the keys, and closes on the next
 //! click (a drag still turns it; the double click is then not special).
 //!
-//! H shows the explorer's panel of controls over the right of the focused view
-//! (the open one, else the topmost): the mouse over the panel goes to it.
+//! Keys, the panel (H) and the keys shown (?) go to the focused view: the open
+//! one, else the one the cursor was over last, else the topmost. The mouse over
+//! the panel goes to the panel.
 
 use std::time::{Duration, Instant};
 
@@ -132,6 +133,10 @@ pub struct Lives {
     events: Vec<egui::Event>,
     /// a press went to the panel: its drag and release do too
     egui_pressed: bool,
+    /// the span the cursor was over last: keys go to it while nothing is open
+    hovered: Option<usize>,
+    /// the window's size at the last mouse event, to place the cursor
+    size: (u32, u32),
     overlay: Option<Overlay>,
 }
 
@@ -398,6 +403,10 @@ impl Lives {
                                     frame_controls(ui, &mut v, &mut playing, "P");
                                     ui.separator();
                                     view_controls(ui, &mut v, &initial_scales, false);
+                                    if !v.show_plots {
+                                        ui.separator();
+                                        v.plots.small(ui, x);
+                                    }
                                     ui.add_space(8.0);
                                     ui.label(egui::RichText::new("? keys · H hide panel · 0 the step's view").small().weak());
                                 });
@@ -447,14 +456,29 @@ impl Lives {
         })
     }
 
-    /// The live span keys and the panel go to: the open one, else the topmost one shown.
+    /// The live span keys and the panel go to: the open one, else the one the cursor
+    /// was over last (while it is shown), else the topmost one shown.
     fn focused_span(&self, timeline: &Timeline, time: f64) -> Option<usize> {
+        let shown = |span: usize| timeline.live_at(time).any(|s| s == span);
         if let Some(open) = &self.open
-            && timeline.live_at(time).any(|s| s == open.span)
+            && shown(open.span)
         {
             return Some(open.span);
         }
+        if let Some(span) = self.hovered
+            && shown(span)
+        {
+            return Some(span);
+        }
         timeline.live_at(time).last()
+    }
+
+    /// Note the span under the cursor, for the keys.
+    fn hover(&mut self, timeline: &Timeline, time: f64, size: (u32, u32)) {
+        self.size = size;
+        if let Some((span, _, _)) = self.under(timeline, time, size, self.cursor) {
+            self.hovered = Some(span);
+        }
     }
 
     fn focused(&self, timeline: &Timeline, time: f64) -> Option<usize> {
@@ -464,6 +488,9 @@ impl Lives {
     pub fn cursor_moved(&mut self, py: Python<'_>, timeline: &Timeline, time: f64, size: (u32, u32), at: (f64, f64)) -> bool {
         let (dx, dy) = ((at.0 - self.cursor.0) as f32, (at.1 - self.cursor.1) as f32);
         self.cursor = at;
+        if self.drag.is_none() && !self.egui_pressed {
+            self.hover(timeline, time, size);
+        }
         if let Some(point) = self.panel_point(timeline, time, size, self.egui_pressed) {
             self.events.push(egui::Event::PointerMoved(point));
             return true;
@@ -687,6 +714,22 @@ mod tests {
         lives.help = true;
         lives.toggle(0); // closing hides the panel and the keys
         assert!(!lives.panel && !lives.help);
+    }
+
+    #[test]
+    fn keys_go_to_the_view_under_the_cursor_unless_one_is_open() {
+        let timeline = grid();
+        let mut lives = Lives::default();
+        let size = (1600, 900);
+        assert_eq!(lives.focused_span(&timeline, 1.0), Some(2), "nothing hovered: the topmost");
+        lives.cursor = (400.0, 450.0);
+        lives.hover(&timeline, 1.0, size);
+        assert_eq!(lives.focused_span(&timeline, 1.0), Some(0));
+        lives.cursor = (10.0, 10.0); // off every view: the last one hovered keeps the keys
+        lives.hover(&timeline, 1.0, size);
+        assert_eq!(lives.focused_span(&timeline, 1.0), Some(0));
+        lives.toggle(2);
+        assert_eq!(lives.focused_span(&timeline, 1.0), Some(2), "the open view");
     }
 
     #[test]

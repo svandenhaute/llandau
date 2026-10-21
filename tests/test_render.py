@@ -159,3 +159,15 @@ def test_plots_belong_to_the_viewer(viewer):
     assert viewer.show_plots
     viewer.reset()
     assert not viewer.show_plots
+
+
+def test_fog_is_off_for_small_structures_unless_set():
+    from llandau import Viewer
+
+    small = Viewer().load(np.array([[[0.0, 0, 0], [1.5, 0, 0]]]), np.array([6, 6]))
+    assert small.fog == 0.0
+    big = Viewer().load(np.array([[[-9.0, 0, 0], [9.0, 0, 0]]]), np.array([6, 6]))
+    assert big.fog > 0.3
+    big.fog = 0.2
+    big.load(np.array([[[0.0, 0, 0], [1.5, 0, 0]]]), np.array([6, 6]))
+    assert abs(big.fog - 0.2) < 1e-6  # set by hand: kept

@@ -94,7 +94,13 @@ pub struct Viewer {
     pub(crate) plots: plots::Plots,
     /// the plots shown large: under the explorer's view, over a live view
     pub(crate) show_plots: bool,
+    /// the fog was set (by hand or a state): loading a structure leaves it
+    fog_set: bool,
 }
+
+/// Structures within this radius (Å) get no fog by default: depth cues mean little on a
+/// small molecule and just grey its far atoms.
+const SMALL_EXTENT: f32 = 7.0;
 
 impl Viewer {
     /// Draw into `view` (`size` pixels, `format`); with a viewport (left, top,
@@ -213,6 +219,7 @@ impl Viewer {
             offscreen: None,
             plots: plots::Plots::default(),
             show_plots: false,
+            fog_set: false,
         })
     }
 
@@ -327,6 +334,9 @@ impl Viewer {
         let (center, radius) = structure.bounds();
         self.camera.fit(center, radius);
         self.home = self.camera;
+        if !self.fog_set {
+            self.renderer.fog = if radius < SMALL_EXTENT { 0.0 } else { render::DEFAULT_FOG };
+        }
         self.frame = self.frame.min(structure.num_frames().saturating_sub(1));
         self.scene.structure = Some(structure);
         self.scene.vectors.clear();
@@ -538,7 +548,8 @@ impl Viewer {
     }
 
     /// Depth cueing: how far the farthest atoms fade towards the background
-    /// (0: none, 1: all the way).
+    /// (0: none, 1: all the way). By default 0.45 for structures larger than 7 Å in
+    /// radius and 0 for smaller ones; once set, loading a structure keeps it.
     #[getter]
     fn fog(&self) -> f32 {
         self.renderer.fog
@@ -547,6 +558,7 @@ impl Viewer {
     #[setter]
     fn set_fog(&mut self, fog: f32) {
         self.renderer.fog = fog.clamp(0.0, 1.0);
+        self.fog_set = true;
     }
 
     /// Ambient occlusion per atom: how much the most buried atoms darken
