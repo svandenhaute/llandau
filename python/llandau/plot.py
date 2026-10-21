@@ -491,6 +491,8 @@ class Plot(VGroup):
         if given is not None:
             lo = float(given[0]) if given[0] is not None else lo
             hi = float(given[1]) if given[1] is not None else hi
+        elif any(a.data.get("inverted", (False, False))[dim] for a in self.artists):
+            lo, hi = hi, lo  # an image's reversed extent, as matplotlib's
         return lo, hi
 
     def _ticks(self, dim: int, lo: float, hi: float, length: float, font: float):
@@ -501,10 +503,10 @@ class Plot(VGroup):
         if given is not None:
             major = np.asarray(given, dtype=float)
         elif log:
-            major, minor = log_ticks(lo, hi)
+            major, minor = log_ticks(min(lo, hi), max(lo, hi))
         else:
             # matplotlib's tick space: the axis length over 3 (x) or 2 (y) label heights
-            major = nice_ticks(lo, hi, max(3, min(9, int(length / ((3 if dim == 0 else 2) * font)))))
+            major = nice_ticks(min(lo, hi), max(lo, hi), max(3, min(9, int(length / ((3 if dim == 0 else 2) * font)))))
         major = major[(major >= min(lo, hi) - 1e-9 * abs(hi - lo)) & (major <= max(lo, hi) + 1e-9 * abs(hi - lo))]
         power = 0
         if names is not None:
@@ -1098,7 +1100,9 @@ class Plot(VGroup):
     def imshow(self, Z, extent=None, origin: str = "upper", cmap="viridis", vmin=None, vmax=None, alpha=None,
                **kwargs) -> Artist:
         """An image of an array (values through cmap, or RGB(A) in [0, 1] or uint8) over `extent`
-        (left, right, bottom, top)."""
+        (left, right, bottom, top), as matplotlib's: column 0 at left, row 0 at top (origin
+        "upper") or bottom ("lower"). The axes run as the extent does (unless their limits are
+        set): without one, "upper" turns the y axis downward."""
         Z = np.asarray(Z)
         rows, cols = Z.shape[:2]
         if extent is None:
@@ -1106,7 +1110,8 @@ class Plot(VGroup):
         l, r, b, t = extent
         style = dict(cmap=cmap, vmin=vmin, vmax=vmax, alpha=alpha, origin=origin)
         _unused(kwargs, "imshow", style)
-        data = {"Z": Z, "extent": extent, "ex": [l, r], "ey": [b, t], "sticky_x": [l, r], "sticky_y": [b, t]}
+        data = {"Z": Z, "extent": extent, "ex": [l, r], "ey": [b, t], "sticky_x": [l, r], "sticky_y": [b, t],
+                "inverted": (r < l, t < b)}
         return self._add(Artist(self, "image", data, style, None))
 
     def _draw_image(self, a: Artist):
@@ -1123,22 +1128,19 @@ class Plot(VGroup):
         if st["alpha"] is not None:
             rgba[..., 3] *= st["alpha"]
         l, r, b, t = d["extent"]
-        # rows run top to bottom on screen
-        flip_y = (t < b) != (st["origin"] == "upper")
-        if not flip_y and st["origin"] != "upper":
+        # where the first and last column and row land on screen, whose rows run top to bottom
+        (x_first, y_first), (x_last, y_last) = self._to_frame([l, r], [t, b] if st["origin"] == "upper" else [b, t])
+        if y_first < y_last:
             rgba = rgba[::-1]
-        elif flip_y and st["origin"] == "upper":
-            rgba = rgba[::-1]
-        if r < l:
+        if x_first > x_last:
             rgba = rgba[:, ::-1]
         # crisp pixels under the renderer's linear filtering
         repeat = max(1, math.ceil(1024 / max(rgba.shape[:2])))
         pixels = np.repeat(np.repeat((rgba * 255).round().astype(np.uint8), repeat, 0), repeat, 1)
         image = ImageMobject(pixels)
-        corners = self._to_frame([min(l, r), max(l, r)], [min(b, t), max(b, t)])
-        image.stretch_to_fit_width(corners[1, 0] - corners[0, 0])
-        image.stretch_to_fit_height(corners[1, 1] - corners[0, 1])
-        image.move_to([(corners[0, 0] + corners[1, 0]) / 2, (corners[0, 1] + corners[1, 1]) / 2, 0])
+        image.stretch_to_fit_width(abs(x_last - x_first))
+        image.stretch_to_fit_height(abs(y_last - y_first))
+        image.move_to([(x_first + x_last) / 2, (y_first + y_last) / 2, 0])
         a.add(image)
 
     def contour(self, X, Y, Z, levels=10, colors=None, cmap=None, linewidths=None, linestyles="-", **kwargs) -> Artist:

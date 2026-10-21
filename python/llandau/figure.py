@@ -85,7 +85,10 @@ class Figure(Group):
         axes = [self.add_plot(cell, **kwargs) for cell in cells]
         if nrows == ncols == 1:
             return axes[0]
-        return np.array(axes, dtype=object).reshape(nrows, ncols).squeeze()
+        grid = np.empty(len(axes), dtype=object)  # not np.array(axes): a plot is a sequence of mobjects
+        for k, ax in enumerate(axes):
+            grid[k] = ax
+        return grid.reshape(nrows, ncols).squeeze()
 
     def add(self, *mobjects):
         """Other mobjects on the figure (in inches)."""

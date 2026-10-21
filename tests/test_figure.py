@@ -59,3 +59,30 @@ def test_figure_on_a_slide():
     deck = build([Slide])
     image = deck.render(deck.marks[0][0] - 1e-6, 320, 180)
     assert (image[..., :3].min(axis=2) < 200).mean() > 0.01
+
+
+@pytest.mark.parametrize("kwargs, top_row, ylim", [
+    ({}, 0, (3.5, -0.5)),                                      # rows downward, as matplotlib's
+    ({"origin": "lower"}, -1, (-0.5, 3.5)),
+    ({"extent": (0, 6, 0, 4)}, 0, (0, 4)),                     # row 0 at the top of the extent
+    ({"extent": (0, 6, 0, 4), "origin": "lower"}, -1, (0, 4)),
+    ({"extent": (6, 0, 4, 0)}, 0, (4, 0)),                     # reversed extent: reversed axes
+])
+def test_imshow_places_rows_as_matplotlib(kwargs, top_row, ylim):
+    from llandau.mobject import ImageMobject
+    Z = np.arange(24, dtype=float).reshape(4, 6)
+    fig, ax = subplots(figsize=(3.0, 2.0))
+    ax.imshow(Z, cmap="gray", **kwargs)
+    image = next(m for m in fig.drawn() if isinstance(m, ImageMobject))
+    gray = image.pixels[..., 0]
+    # the top left pixel shows the top row's first column; values grow along rows and columns
+    assert gray[0, 0] == gray.min() if top_row == 0 else gray[-1, 0] == gray.min()
+    assert gray[0, -1] > gray[0, 0]
+    assert ax.get_ylim() == pytest.approx(ylim)
+
+
+def test_subplots_grid():
+    fig, axes = subplots(2, 3, figsize=(6.0, 4.0))
+    assert axes.shape == (2, 3)
+    fig, axes = subplots(1, 3, figsize=(6.0, 2.0))
+    assert axes.shape == (3,)
