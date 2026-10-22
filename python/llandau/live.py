@@ -20,7 +20,8 @@ viewer.camera; the camera moves there smoothly over the first 0.9 s of the step)
 frame, style, sidechains, shading, fog, occlusion, coloring, scrub_discrete,
 show / hide (layer names), and plots (True: the viewer's plots large under its
 3D view). Consecutive steps of the same scene keep everything else, including
-where the presenter turned it.
+where the presenter turned it. On a slide, fog is 0 unless a view or state sets
+it (the explorer fogs large structures by default).
 
 The explorer's "copy state" gives the whole view as one dict, and its Record
 button keyframes of it: pass them as state=... (a dict or a JSON file; the
@@ -118,6 +119,7 @@ def still(scene: str, theme: str, view: dict, size: tuple[int, int], state: dict
     from .viewer import Viewer
 
     viewer = Viewer(theme=theme)
+    viewer.fog = 0.0  # as in the player
     build(viewer, scene)
     if state:
         viewer.state = state

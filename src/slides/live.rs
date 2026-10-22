@@ -401,11 +401,15 @@ impl Lives {
                 let initial_scales = state.initial_scales.clone();
                 again |= overlay.draw(gpu, &target.view, pixels, dark, events, |ui| {
                     if panel {
+                        // the panel is a control, not part of the slide: black in either theme,
+                        // with the plots on white
                         egui::Panel::right("live controls")
                             .exact_size(PANEL_WIDTH)
                             .resizable(false)
                             .show_separator_line(false)
+                            .frame(egui::Frame::side_top_panel(ui.style()).fill(egui::Color32::BLACK))
                             .show(ui, |ui| {
+                                ui.style_mut().visuals = egui::Visuals::dark();
                                 egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                                     ui.set_max_width(PANEL_WIDTH - 24.0);
                                     frame_controls(ui, &mut v, &mut playing, "P");
@@ -413,7 +417,10 @@ impl Lives {
                                     view_controls(ui, &mut v, &initial_scales, false);
                                     if !v.show_plots {
                                         ui.separator();
-                                        v.plots.small(ui, x);
+                                        ui.scope(|ui| {
+                                            ui.style_mut().visuals.extreme_bg_color = egui::Color32::WHITE;
+                                            v.plots.small(ui, x);
+                                        });
                                     }
                                     ui.add_space(8.0);
                                     ui.label(egui::RichText::new("? keys · H hide panel · 0 the step's view").small().weak());

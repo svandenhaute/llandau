@@ -321,6 +321,7 @@ class _Builder:
         if viewer is None:
             from .viewer import Viewer
             viewer = self.viewers[(name, theme)] = Viewer(theme=theme)
+            viewer.fog = 0.0  # no depth cueing on a slide unless the view asks (fog=)
             live.build(viewer, name)
         rect = lambda r: ((r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2, r.width, r.height)  # noqa: E731
         state = dict(state or {})
