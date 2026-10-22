@@ -1,6 +1,7 @@
 //! llandau: smooth scientific slides drawn live (`slides`), and a viewer for atomic
 //! trajectories that draws into decks, the explorer window or offscreen.
 
+pub mod bonds;
 pub mod camera;
 pub mod clash;
 pub mod occlusion;
@@ -15,7 +16,7 @@ pub mod theme;
 pub mod window;
 
 use glam::Vec3;
-use numpy::{PyArray1, PyArrayMethods, PyReadonlyArrayDyn, PyUntypedArrayMethods};
+use numpy::{PyArray1, PyArray2, PyArrayMethods, PyReadonlyArrayDyn, PyUntypedArrayMethods};
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -289,9 +290,9 @@ impl Viewer {
     // --- structure ---------------------------------------------------------------
 
     /// Set the trajectory: positions (frames, atoms, 3), radii and vdw_radii
-    /// (atoms,), colors (atoms, 3 or 4), bonds (edges, 2) and optionally protein
-    /// roles (atoms,): 0 hydrogen, 1 side chain, 2 backbone N C O, 3 CA. Clears
-    /// the layers and frames the camera on all frames.
+    /// (atoms,), colors (atoms, 3 or 4), bonds (edges, 2; drawn with dynamic_bonds
+    /// off) and optionally protein roles (atoms,): 0 hydrogen, 1 side chain, 2
+    /// backbone N C O, 3 CA. Clears the layers and frames the camera on all frames.
     #[pyo3(signature = (positions, radii, vdw_radii, colors, edges, roles = None))]
     fn set_structure(
         &mut self,
@@ -663,6 +664,19 @@ impl Viewer {
         Ok(())
     }
 
+    /// Infer the bonds anew in every frame (and the ghost) from the atoms' distances,
+    /// instead of keeping the bonds the structure was loaded with (on by default).
+    #[getter]
+    fn dynamic_bonds(&self) -> bool {
+        self.scene.dynamic_bonds
+    }
+
+    #[setter]
+    fn set_dynamic_bonds(&mut self, dynamic: bool) {
+        self.scene.dynamic_bonds = dynamic;
+        self.changed(LOOK);
+    }
+
     /// Set any of the sizes (in Å): radius_scale (ball and stick atoms),
     /// bond_radius, stick_radius, tube_radius, arrow_radius, trail_radius.
     #[pyo3(signature = (**sizes))]
@@ -958,9 +972,30 @@ impl Viewer {
     }
 }
 
+/// Bonds (edges, 2) between atoms closer than `tolerance` times the sum of their
+/// covalent radii: positions (atoms, 3), radii (atoms,).
+#[pyfunction]
+#[pyo3(signature = (positions, radii, tolerance = bonds::TOLERANCE))]
+fn infer_bonds<'py>(
+    py: Python<'py>,
+    positions: PyReadonlyArrayDyn<f32>,
+    radii: PyReadonlyArrayDyn<f32>,
+    tolerance: f32,
+) -> PyResult<Bound<'py, PyArray2<i64>>> {
+    let positions = points(&positions, "positions")?;
+    let radii = radii.as_slice()?;
+    if radii.len() != positions.len() {
+        return Err(value_error(format!("radii: {} entries for {} atoms", radii.len(), positions.len())));
+    }
+    let edges: Vec<i64> = bonds::infer(&positions, radii, tolerance).iter().flatten().map(|&a| a as i64).collect();
+    let count = edges.len() / 2;
+    Ok(PyArray1::from_vec(py, edges).reshape([count, 2])?)
+}
+
 #[pymodule]
 fn _core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Viewer>()?;
+    module.add_function(wrap_pyfunction!(infer_bonds, module)?)?;
     module.add_class::<slides::Slides>()?;
     module.add_function(wrap_pyfunction!(slides::parse_svg, module)?)?;
     module.add_function(wrap_pyfunction!(slides::image_size, module)?)?;

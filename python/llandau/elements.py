@@ -38,8 +38,7 @@ def colors(numbers, theme="light"):
 
 def infer_bonds(positions, numbers, tolerance=1.15):
     """Bonds (edges, 2) between atoms closer than `tolerance` times the sum of their covalent radii."""
-    positions = np.asarray(positions, dtype=np.float64)
-    radii = covalent_radii(numbers)
-    distances = np.linalg.norm(positions[:, None] - positions[None], axis=-1)
-    i, j = np.nonzero(np.triu(distances < tolerance * (radii[:, None] + radii[None]), k=1))
-    return np.stack([i, j], axis=1).astype(np.int64)
+    from ._core import infer_bonds
+
+    positions = np.ascontiguousarray(positions, dtype=np.float32)
+    return infer_bonds(positions, np.ascontiguousarray(covalent_radii(numbers), dtype=np.float32), tolerance)

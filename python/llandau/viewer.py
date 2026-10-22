@@ -27,13 +27,17 @@ class Viewer(_Viewer):
         super().__init__()
         self.theme = theme
 
-    def load(self, positions, numbers, edges=None, roles=None, backbone_colormap="rainbow"):
+    def load(self, positions, numbers, edges=None, roles=None, backbone_colormap="rainbow", dynamic_bonds=None):
         """Set a trajectory from positions (frames, atoms, 3) and atomic numbers (atoms,).
 
-        Bonds are inferred from the first frame unless given. With `roles` (0 hydrogen,
-        1 side chain, 2 backbone N C O, 3 CA) the protein style becomes available and
-        the backbone is colored N to C terminus with `backbone_colormap`.
+        Bonds are inferred anew in every frame as it is drawn; with `dynamic_bonds` off,
+        `edges` (or those of the first frame) are kept throughout (None keeps the
+        viewer's setting, on by default). With `roles` (0
+        hydrogen, 1 side chain, 2 backbone N C O, 3 CA) the protein style becomes
+        available and the backbone is colored N to C terminus with `backbone_colormap`.
         """
+        if dynamic_bonds is not None:
+            self.dynamic_bonds = dynamic_bonds
         positions = _f32(positions)
         if positions.ndim == 2:
             positions = positions[None]

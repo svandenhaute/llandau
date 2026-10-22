@@ -2,11 +2,13 @@
 //! layers (trails, vector fields, colorings, a ghost), turned into GPU
 //! instances for the current frame.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 
+use crate::bonds;
 use crate::clash;
 use crate::occlusion;
 use crate::surface::{self, MeshVertex};
@@ -76,6 +78,7 @@ pub struct Structure {
     /// van der Waals radii, for side chain spheres and clashes
     pub vdw: Vec<f32>,
     pub colors: Vec<Rgba>,
+    /// the bonds as loaded (see Scene::dynamic_bonds)
     pub edges: Vec<[u32; 2]>,
     /// protein roles (see `protein`), or None for a plain molecule
     pub roles: Option<Vec<u8>>,
@@ -281,6 +284,8 @@ pub struct Scene {
     pub surface: Surface,
     pub show_clashes: bool,
     pub clash_overlap: f32,
+    /// bonds inferred from the positions drawn (each frame, the ghost) instead of the structure's edges
+    pub dynamic_bonds: bool,
     /// the frame index walks the discrete states instead of the path frames
     pub scrub_discrete: bool,
     /// how much buried atoms darken (ambient occlusion per atom; 0: none)
@@ -326,6 +331,7 @@ impl Default for Scene {
             },
             show_clashes: false,
             clash_overlap: 0.4,
+            dynamic_bonds: true,
             scrub_discrete: false,
             occlusion: 0.5,
         }
@@ -367,7 +373,19 @@ impl Scene {
 
     /// Clashing pairs (i, j, overlap) at `positions`; in the protein style, among heavy atoms.
     pub fn clashes(&self, s: &Structure, positions: &[Vec3]) -> Vec<(usize, usize, f32)> {
-        clash::find(positions, &s.vdw, self.drawn_atoms(s), &s.excluded, self.clash_overlap)
+        let excluded = match self.dynamic_bonds {
+            true => Cow::Owned(clash::exclusions(s.num_atoms, &self.bonds(s, positions))),
+            false => Cow::Borrowed(&s.excluded),
+        };
+        clash::find(positions, &s.vdw, self.drawn_atoms(s), &excluded, self.clash_overlap)
+    }
+
+    /// The bonds at `positions`: inferred from them with dynamic_bonds, else the structure's.
+    pub fn bonds<'a>(&self, s: &'a Structure, positions: &[Vec3]) -> Cow<'a, [[u32; 2]]> {
+        match self.dynamic_bonds {
+            true => Cow::Owned(bonds::infer(positions, &s.radii, bonds::TOLERANCE)),
+            false => Cow::Borrowed(&s.edges),
+        }
     }
 
     /// The path frame (fractional) that `frame` corresponds to: with `scrub_discrete`, the
@@ -525,7 +543,7 @@ impl Scene {
         if !self.protein(s) {
             let bond = palette.bond;
             spheres.extend((0..s.num_atoms).map(|a| sphere(positions[a], self.radius_scale * s.radii[a], colors[a])));
-            tubes.extend(s.edges.iter().map(|&[i, j]| {
+            tubes.extend(self.bonds(s, positions).iter().map(|&[i, j]| {
                 LatheInstance::new(positions[i as usize], positions[j as usize], self.bond_radius, bond, bond)
             }));
             return;
@@ -559,7 +577,7 @@ impl Scene {
         match self.sidechains {
             Sidechains::Sticks => {
                 let mut joints = HashSet::new();
-                for &[i, j] in &s.edges {
+                for &[i, j] in self.bonds(s, positions).iter() {
                     let (i, j) = (i as usize, j as usize);
                     if drawn(i, j) {
                         tubes.push(LatheInstance::new(positions[i], positions[j], self.stick_radius, colors[i], colors[j]));

@@ -201,3 +201,22 @@ def test_fog_is_off_for_small_structures_unless_set():
     big.fog = 0.2
     big.load(np.array([[[0.0, 0, 0], [1.5, 0, 0]]]), np.array([6, 6]))
     assert abs(big.fog - 0.2) < 1e-6  # set by hand: kept
+
+
+def test_dynamic_bonds_follow_the_frame(viewer):
+    from llandau import elements
+
+    # the stretched O-H (1.26 Å) is past 1.15 x (0.66 + 0.31) Å: no longer bonded
+    assert elements.infer_bonds(POSITIONS[0], NUMBERS).tolist() == [[0, 1], [0, 2]]
+    assert elements.infer_bonds(POSITIONS[-1], NUMBERS).tolist() == [[0, 2]]
+    assert viewer.dynamic_bonds
+    viewer.frame = 4
+    broken = viewer.render_image(160, 120)
+    viewer.dynamic_bonds = False
+    kept = viewer.render_image(160, 120)
+    assert drawn(broken) < drawn(kept)
+    viewer.frame = 0
+    viewer.dynamic_bonds = False
+    static = viewer.render_image(160, 120)
+    viewer.dynamic_bonds = True
+    assert np.array_equal(viewer.render_image(160, 120), static)
