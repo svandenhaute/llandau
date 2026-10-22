@@ -123,11 +123,17 @@ pub fn interpolate(xs: &[f64], ys: &[f64], x: f64) -> f64 {
     }
 }
 
-/// The keys, as a centered card over `ui`: (key, what it does) rows, "" keys head groups.
+/// The keys, as a centered black card with white text over `ui` (in either theme):
+/// (key, what it does) rows, "" keys head groups.
 pub fn help(ui: &egui::Ui, keys: &[(&str, &str)], text: f32) {
+    // smaller text when the rows would not fit the view: a row is a line (about 1.4 times
+    // the text size in egui's font) plus 0.35 of spacing, within the card's margins
+    let text = text.min((ui.max_rect().height() - 2.0 * text) / (1.95 * keys.len() as f32)).max(6.0);
     let area = egui::Area::new(egui::Id::unique("llandau keys")).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).fade_in(false);
     area.show(ui.ctx(), |ui| {
-        egui::Frame::popup(ui.style()).inner_margin(text).show(ui, |ui| {
+        ui.style_mut().visuals = egui::Visuals::dark();
+        ui.style_mut().visuals.override_text_color = Some(Color32::WHITE);
+        egui::Frame::popup(ui.style()).fill(Color32::BLACK).inner_margin(text).show(ui, |ui| {
             egui::Grid::new("keys").num_columns(2).spacing([1.5 * text, 0.35 * text]).show(ui, |ui| {
                 for (key, action) in keys {
                     if key.is_empty() {
