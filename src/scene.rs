@@ -108,7 +108,7 @@ impl Structure {
         edges: Vec<[u32; 2]>,
         roles: Option<Vec<u8>>,
     ) -> Self {
-        let chains = roles.as_deref().map_or_else(Vec::new, |r| protein::chains(r, &positions[..num_atoms]));
+        let chains = roles.as_deref().map_or_else(Vec::new, |r| protein::chains(r, &positions, num_atoms));
         let excluded = clash::exclusions(num_atoms, &edges);
         let all: Vec<usize> = (0..num_atoms).collect();
         let heavy = match &roles {
