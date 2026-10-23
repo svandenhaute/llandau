@@ -1,6 +1,8 @@
 # llandau
 
-Clear scientific communication, with support for figures, formulas, and interactive geometric models. A deck is
+Clear scientific communication, with support for figures, formulas, and interactive geometric models. Named after one of the greatest physicists of all time, [Lev Landau](https://en.wikipedia.org/wiki/Lev_Landau).
+
+A deck is
 written like a [manim](https://www.manim.community) scene and plays straight from the
 code (wgpu): no videos, no render step. Everything on screen is live while you present:
 step back, scrub, turn a molecule, change its rendering. Plots and renders can be saved separately (PDF/SVG).
