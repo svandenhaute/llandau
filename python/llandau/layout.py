@@ -242,11 +242,14 @@ def right_of(mob, ref, gap: float = S, align=ORIGIN):
     return mob.next_to(ref, RIGHT, buff=gap, aligned_edge=align)
 
 
-def align(mob, ref, edge):
+def align(mob, ref, edge, by=None):
     """Line up one edge of mob with the same edge of ref, moving along that axis only.
-    align(a, b, LEFT) -> same left edge; align(a, b, UP) -> same top edge."""
+    align(a, b, LEFT) -> same left edge; align(a, b, UP) -> same top edge.
+    by: a part of mob whose edge lines up instead, e.g. the left-hand sides of two formulas so
+    their = signs line up: align(e2, e1["lhs"], RIGHT, by=e2["lhs"]); ref can be a part too."""
     edge = np.asarray(edge, dtype=float)
-    delta = (ref.get_critical_point(edge) - mob.get_critical_point(edge)) * np.abs(edge)
+    anchor = mob if by is None else by
+    delta = (ref.get_critical_point(edge) - anchor.get_critical_point(edge)) * np.abs(edge)
     return mob.shift(delta)
 
 

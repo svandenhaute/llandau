@@ -16,7 +16,7 @@ from .animation import AddTextLetterByLetter, Write, LaggedStart
 from .mobject import Group, DL, DR, ImageMobject, config
 from .scene import MIN_STEP, Scene
 
-from .theme import DARK, LABEL, use
+from .theme import DARK, use
 from .layout import R, Region, place
 from .text import text, title as _title
 from .cite import cite as _cite
@@ -42,7 +42,7 @@ class Deck(Scene):
         use(self.theme)
         self.camera.background_color = self.theme.bg
         if self.numbered and self.number is not None:
-            self.add(text(str(self.number), size=LABEL).to_corner(DR, buff=0.3))
+            self.add(text(str(self.number), size=self.theme.label).to_corner(DR, buff=0.3))
 
     # the step's live views play until here (a recording, the move to a camera): the step ends after
     _live_until = 0.0

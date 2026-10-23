@@ -3,6 +3,7 @@
     text("plain"), bold("strong"), italic("aside")
     text("cost $O(N^3)$")            # contains $ -> the whole string is Typst markup
     eq("arrow(F) = m arrow(a)")       # display math, Typst syntax
+    e = eq("{F} = m a", F="arrow(F)")  # e["F"]: the glyphs of a part, to colour, bracket, animate
     title("slide title"), bullets([...])
 """
 import hashlib
@@ -11,10 +12,10 @@ import subprocess
 from functools import cache, partial
 from pathlib import Path
 
-from .mobject import SVGMobject, ManimColor, LEFT
+from .mobject import SVGMobject, ManimColor, VGroup, LEFT
 
 from . import theme
-from .theme import FONT, TITLE, BODY
+from .theme import FONT
 from .layout import R, place, stack, S
 from .media import CACHE_DIR
 
@@ -37,7 +38,7 @@ def _minus(s: str) -> str:
     return "−" + s[1:] if s.startswith("-") else s
 
 
-def text(s: str, size: float = BODY, color=None, weight=NORMAL, slant=NORMAL,
+def text(s: str, size: float | None = None, color=None, weight=NORMAL, slant=NORMAL,
          typst_markup: bool | None = None, font: str | None = None, **kwargs):
     """Single text object, typeset with Typst. Contains unescaped $...$ -> the string is Typst
     markup (so *, _, #, ~ have their Typst meaning there; force either way with typst_markup=).
@@ -61,12 +62,51 @@ bold = partial(text, weight=BOLD)
 italic = partial(text, slant=ITALIC)
 
 
-def eq(s: str, size: float = BODY, **kwargs):
-    """Display math in Typst syntax (no $ needed). Glyphs: eq(...).family_members_with_points()."""
-    return typst(f"$ {s} $", size=size, **kwargs)
+_PART = re.compile(r"\{(\w+)\}")
 
 
-def typst(src: str, size: float = BODY, color=None, weight=NORMAL, slant=NORMAL, font: str | None = None,
+def eq(s: str, size: float | None = None, **kwargs):
+    """Display math in Typst syntax (no $ needed). Glyphs: eq(...).family_members_with_points().
+
+    Parts: a {name} in s with a keyword name=... is that Typst math (balanced: an operand, not
+    "sqrt("), typeset in place as a group; eq(...)["name"] is its glyphs, a VGroup:
+        e = eq("cal(S) = {length} - epsilon.alt T", length="cal(L)_g [gamma]")
+        e["length"].set_color(BLUE)
+        bracket(e["length"], "geodesic\nlength")
+    Keep operators outside the parts: a part is spaced as one operand. Other kwargs go to SVGMobject."""
+    parts = {name: kwargs.pop(name) for name in dict.fromkeys(_PART.findall(s)) if name in kwargs}
+    if not parts:
+        return typst(f"$ {s} $", size=size, **kwargs)
+    tags = {(1, k, 254): name for k, name in enumerate(parts, start=1)}  # colours of nothing else
+    fills = {name: f"rgb{tag}" for tag, name in tags.items()}
+
+    def substitute(tagged: bool) -> str:
+        def part(m):
+            if m[1] not in parts:
+                return m[0]
+            fill = f"(fill: {fills[m[1]]})" if tagged else ""
+            return f"#text{fill}[$ {parts[m[1]]} $]"  # the same element on both pages: the same layout
+        return f"$ {_PART.sub(part, s)} $"
+
+    # page 1 as shown, page 2 with each part in its own colour: path i of one is path i of the other
+    doc = _document(substitute(False) + "\n#pagebreak()\n" + substitute(True), size, kwargs.pop("color", None),
+                    kwargs.pop("weight", NORMAL), kwargs.pop("slant", NORMAL), kwargs.pop("font", None))
+    shown, tagged = _compile_pages(doc, 2)
+    mob = SVGMobject(str(shown), height=None, **kwargs).scale(TYPST_SCALE)
+    paths = SVGMobject(str(tagged), height=None).submobjects
+    if len(paths) != len(mob.submobjects):
+        raise RuntimeError(f"eq: the parts of {s!r} changed its layout")
+    for glyph, path in zip(mob.submobjects, paths):
+        name = tags.get(tuple(int(round(255 * c)) for c in path.get_color().to_rgb()))
+        if name is not None:
+            mob.id_to_vgroup_dict.setdefault(name, VGroup()).add(glyph)
+    missing = [name for name in parts if name not in mob.id_to_vgroup_dict]
+    if missing:
+        raise ValueError(f"eq: parts {missing} of {s!r} draw nothing")
+    return mob
+
+
+def typst(src: str, size: float | None = None, color=None, weight=NORMAL, slant=NORMAL, font: str | None = None,
           **kwargs) -> SVGMobject:
     """Arbitrary Typst markup as a vector mobject, in the deck font and colour.
     Colours set inside the markup are kept; kwargs go to SVGMobject."""
@@ -74,7 +114,7 @@ def typst(src: str, size: float = BODY, color=None, weight=NORMAL, slant=NORMAL,
     return SVGMobject(str(_compile_pages(doc, 1)[0]), height=None, **kwargs).scale(TYPST_SCALE)
 
 
-def texts(strings, size: float = BODY, color=None, weight=NORMAL, slant=NORMAL, font: str | None = None,
+def texts(strings, size: float | None = None, color=None, weight=NORMAL, slant=NORMAL, font: str | None = None,
           **kwargs) -> list[SVGMobject]:
     """text() of each string, typeset in one Typst run (e.g. tick labels)."""
     sources = [s if _MATH.search(s) else _plain(s) for s in strings]
@@ -94,7 +134,9 @@ def _plain(s: str) -> str:
 
 
 def _document(src: str, size, color, weight, slant, font=None) -> str:
+    """size, color None: the theme's body size and foreground."""
     fonts = ", ".join(f'"{f}"' for f in _math_fonts())
+    size = size if size is not None else theme.current().body
     return "\n".join([
         "#set page(width: auto, height: auto, margin: 0pt, fill: none)",
         f'#set text(font: "{font or FONT}", size: {size}pt, fill: rgb("{ManimColor(color or theme.current().fg).to_hex()}"),'
@@ -130,9 +172,9 @@ def _compile_pages(doc: str, pages: int) -> list[Path]:
     return paths
 
 
-def title(s: str, size: float = TITLE, **kwargs):
-    """Text placed left-aligned in the title band (shrunk if it doesn't fit)."""
-    return place(text(s, size=size, **kwargs), R.title, anchor=LEFT)
+def title(s: str, size: float | None = None, **kwargs):
+    """Text placed left-aligned in the title band (shrunk if it doesn't fit); size: the theme's title."""
+    return place(text(s, size=size if size is not None else theme.current().title, **kwargs), R.title, anchor=LEFT)
 
 
 def bullets(items, gap: float = S, marker: str | None = None, **kwargs):

@@ -3,7 +3,7 @@ import pytest
 
 from llandau import (
     BLACK, BLUE, UP, Create, Deck, Dot, FadeIn, FadeOut, LaggedStart, LIGHT, R, Rectangle, Scene, Square, Transform,
-    Unwrite, VGroup, Write, build, place, text,
+    Unwrite, VGroup, Write, bracket, build, eq, place, text,
 )
 from llandau.mobject import smooth_handles
 
@@ -335,3 +335,62 @@ def test_live_state_and_play_set_the_step():
     assert marks[1] - marks[0] >= CAMERA_MOVE - 1e-6  # the move to the state's camera
     assert marks[2] - marks[1] < CAMERA_MOVE  # a frame is set at once
     assert deck.num_lives == 3
+
+
+def test_eq_parts_and_brackets():
+    plain = eq("cal(S) = cal(L)_g [gamma] - epsilon.alt T")
+    e = eq("cal(S) = {length} - {legendre}", length="cal(L)_g [gamma]", legendre="epsilon.alt T")
+    # the parts don't move a glyph
+    assert np.allclose(plain.get_all_points(), e.get_all_points())
+    assert len(e["length"]) == 5 and len(e["legendre"]) == 2  # L g [ gamma ], epsilon T
+    assert e["length"].get_right()[0] < e["legendre"].get_left()[0]
+    with pytest.raises(KeyError):
+        e["missing"]
+    e["length"].set_color(BLUE)
+    first = bracket(e["length"], "geodesic\nlength")
+    second = bracket(e["legendre"], "Legendre\npair", at=e["length"])
+    assert first[0].get_color().to_hex() == BLUE.to_hex()  # the target's colour, label too
+    assert first[1].family_members_with_points()[0].get_color().to_hex() == BLUE.to_hex()
+    assert first[0].get_top()[1] == pytest.approx(second[0].get_top()[1])  # at one height
+    assert first[0].get_top()[1] < e["length"].get_bottom()[1]
+    assert first[0].width == pytest.approx(e["length"].width)
+    assert first[1].get_top()[1] < first[0].get_bottom()[1]  # the label under it
+    over = bracket(e["legendre"], direction=UP)
+    assert len(over) == 1 and over.get_bottom()[1] > e["legendre"].get_top()[1]
+
+
+def test_theme_sizes_are_the_defaults():
+    from dataclasses import replace
+
+    from llandau import title, use
+
+    def sizes(theme):
+        use(theme)
+        return np.array([title("Tg").height, text("Tg").height, eq("x^2").height,
+                         bracket(text("Tg"), "Tg")[1].height, text("Tg", size=20).height])
+    try:
+        ratio = sizes(replace(LIGHT, title=40, body=35, small=30, label=25)) / sizes(LIGHT)
+    finally:
+        use(LIGHT)
+    # title, text, formula, bracket label; an explicit size stays
+    assert ratio == pytest.approx([40 / 34, 35 / 28, 35 / 28, 30 / 22, 1], rel=0.02)
+
+
+def test_align_by_a_part():
+    from llandau import DOWN, RIGHT, align
+    top = eq("{lhs} = a + b", lhs="cal(S)[gamma]")
+    bottom = eq("{lhs} = integral_gamma sqrt({g}) |d q|", lhs="cal(L)_g [gamma]", g="g(q)").shift([1, -2, 0])
+    align(bottom, top["lhs"], RIGHT, by=bottom["lhs"])
+    assert bottom["lhs"].get_right()[0] == pytest.approx(top["lhs"].get_right()[0])
+    assert bottom.get_center()[1] == pytest.approx(-2 + top.get_center()[1])  # along x only
+    definition = eq("{g} = 1 + x", g="g(q)")
+    align(definition, bottom["g"], DOWN, by=definition["g"])
+    assert definition["g"].get_bottom()[1] == pytest.approx(bottom["g"].get_bottom()[1])
+
+
+def test_bracket_without_ticks_is_an_underline():
+    e = eq("{a} + b", a="x^2")
+    line = bracket(e["a"], "a", tick=0)
+    assert line[0].height == pytest.approx(0, abs=1e-9)
+    assert line[0].width == pytest.approx(e["a"].width)
+    assert line[1].get_top()[1] < line[0].get_y()

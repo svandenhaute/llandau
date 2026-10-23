@@ -148,7 +148,7 @@ class Plot(VGroup):
         self.xticklabels, self.yticklabels = xticklabels, yticklabels
         self.aspect = aspect
         self.scale_factor = scale
-        self.fontsize = fontsize or theme.SMALL
+        self.fontsize = fontsize or theme.current().small
         self.tick_fontsize = tick_fontsize or 0.85 * self.fontsize
         self.legend_fontsize = legend_fontsize or 0.8 * self.fontsize
         self.font = font

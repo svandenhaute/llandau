@@ -21,7 +21,7 @@ import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
 
-from .theme import LABEL
+from . import theme
 from .text import text
 from .media import CACHE_DIR
 from .journals import abbreviation
@@ -43,12 +43,12 @@ _ARXIV = re.compile(r"(?:arxiv[:./]\s*|arxiv\.org/(?:abs|pdf)/)" + _ARXIV_ID, re
 _BARE_ARXIV = re.compile(_ARXIV_ID + r"(?:\.pdf)?", re.IGNORECASE)
 
 
-def cite(*sources: str, size: float = LABEL, sep: str = "; ", title: bool = False, authors: int | str = 1,
+def cite(*sources: str, size: float | None = None, sep: str = "; ", title: bool = False, authors: int | str = 1,
          **kwargs):
     """Citation(s) as one text, e.g. "Jumper et al., Nature 596, 583 (2021)" (see citation());
     several are joined by sep ("\n": one per line). kwargs go to text(): color, slant, ..."""
     line = sep.join(citation(s, title=title, authors=authors) for s in sources)
-    return text(line, size=size, typst_markup=False, **kwargs)
+    return text(line, size=size if size is not None else theme.current().label, typst_markup=False, **kwargs)
 
 
 def citation(source: str, title: bool = False, authors: int | str = 1) -> str:

@@ -22,8 +22,9 @@ modules
                errorbar, imshow, contour(f), legend, colorbar), revealed in steps
     ticks, geometry, markers   its tick placement, clipping and dashes, marker painting
     figure     subplots, Figure: plots for papers, saved as SVG, PDF or PNG
-    theme      DARK / LIGHT, font, type scale (TITLE, BODY, SMALL, LABEL)
-    text       text, bold, italic, eq, typst, title, bullets (Typst)
+    theme      DARK / LIGHT, font, type scale (Theme.title, body, small, label; TITLE, BODY, ... their defaults)
+    text       text, bold, italic, eq, typst, title, bullets (Typst); eq("{a} = b", a="...")["a"]: a part
+    annotate   bracket: a square bracket and its label under or over (a part of) a formula
     layout     R (screen regions), place, below/above/left_of/right_of, align, stack, row, gaps XS..XL
     cite       cite, citation, reference: "Jumper et al., Nature 596, 583 (2021)" from a DOI, arXiv id
                or article URL (looked up once, cached in .llandau_cache/references.json)
@@ -47,6 +48,7 @@ from .figure import Figure, subplots
 from .theme import *
 from .layout import *
 from .text import *
+from .annotate import *
 from .media import *
 from .cite import *
 from .deck import *

@@ -37,6 +37,15 @@ page per step.
 `title=True` or `authors="all"` make it longer. Each lookup is cached in `.llandau_cache/references.json`,
 so the deck plays offline once built.
 
+A formula is typeset once, in Typst, and its named parts are there to colour, bracket or animate:
+
+```python
+e = eq("cal(S) = {length} - {legendre}", length="cal(L)_g [gamma]", legendre="epsilon.alt T")
+e["length"].set_color(BLUE)
+self.reveal(group(e, bracket(e["length"], "geodesic\nlength"),
+                  bracket(e["legendre"], "Legendre\npair", at=e["length"])))  # both at one height
+```
+
 ## Geometric models
 
 ![trp-cage's NMR models playing in a wgpu view: all atoms in flat shading, then the protein tube and side chains, lit](https://raw.githubusercontent.com/svandenhaute/llandau/main/docs/models.gif)

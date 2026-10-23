@@ -1129,7 +1129,7 @@ def _view_box_scale(data: bytes, size) -> float:
 class SVGMobject(VMobject):
     """An SVG file as one VMobject per drawn path, flipped to y up and centered;
     scaled to `height` (or `width`; both None: the file's own units).
-    id_to_vgroup_dict maps group ids to the paths inside them."""
+    id_to_vgroup_dict maps group ids to the paths inside them, also as svg["id"]."""
 
     def __init__(self, file_name, height: float | None = 2, width: float | None = None, should_center: bool = True,
                  stroke_width: float | None = None, fill_opacity: float | None = None, color=None, **kwargs):
@@ -1167,3 +1167,9 @@ class SVGMobject(VMobject):
             self.scale_to_fit_height(height)
         if width is not None:
             self.scale_to_fit_width(width)
+
+    def __getitem__(self, index):
+        """svg["name"]: the paths of a group id (or of a part of eq()); svg[i]: the i-th path."""
+        if isinstance(index, str):
+            return self.id_to_vgroup_dict[index]
+        return super().__getitem__(index)
