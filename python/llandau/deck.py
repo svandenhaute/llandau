@@ -4,6 +4,7 @@
         theme = LIGHT
         def construct(self):
             self.title("results")
+            self.cite("10.1038/s41586-021-03819-2")       # in the footer: Jumper et al., Nature ...
             self.reveal(image("images/a.png", R.body.left))
             self.show_svg("images/b.svg", R.body.right)   # one slide step per layer
 
@@ -12,12 +13,13 @@
 from __future__ import annotations
 
 from .animation import AddTextLetterByLetter, Write, LaggedStart
-from .mobject import Group, DR, ImageMobject, config
+from .mobject import Group, DL, DR, ImageMobject, config
 from .scene import MIN_STEP, Scene
 
 from .theme import DARK, LABEL, use
 from .layout import R, Region, place
 from .text import text, title as _title
+from .cite import cite as _cite
 from .media import layered_svg
 from . import live as _live
 
@@ -123,6 +125,17 @@ class Deck(Scene):
         """Slide title in the title band. By default added without ending the step."""
         mob = _title(s, **kwargs)
         return self.reveal(mob, anim=anim, pause=pause)
+
+    def cite(self, *sources: str, region: Region | None = None, anim=None, pause: bool = False, sep: str = "; ",
+             title: bool = False, authors: int | str = 1, **kwargs):
+        """Citation(s) of DOIs, arXiv ids or article URLs, left in the footer strip (default; it
+        leaves the slide number room) or in region, shrunk to fit. Added without ending the step.
+        title, authors: see llandau.cite.citation; kwargs go to text(): size, color, slant, ..."""
+        if region is None:  # shrunk only to its width: the strip is lower than a line of text
+            f = R.footer
+            region = Region(f.x0, f.x1 - 0.8, f.y0, f.y0 + 1)
+        mob = _cite(*sources, sep=sep, title=title, authors=authors, **kwargs)
+        return self.reveal(place(mob, region, anchor=DL), anim=anim, pause=pause)  # on the number's baseline
 
     def show_svg(self, path, region: Region | None = None, layered: bool = True, anim=None,
                  run_time: float | None = None, pause: bool = True, accumulate: bool = True, **kwargs):

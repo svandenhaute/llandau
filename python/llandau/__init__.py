@@ -25,6 +25,9 @@ modules
     theme      DARK / LIGHT, font, type scale (TITLE, BODY, SMALL, LABEL)
     text       text, bold, italic, eq, typst, title, bullets (Typst)
     layout     R (screen regions), place, below/above/left_of/right_of, align, stack, row, gaps XS..XL
+    cite       cite, citation, reference: "Jumper et al., Nature 596, 583 (2021)" from a DOI, arXiv id
+               or article URL (looked up once, cached in .llandau_cache/references.json)
+    journals   JOURNALS: abbreviations of ~200 physics, chemistry, maths and CS journals (Crossref's are unreliable)
     media      image, svg, layered_svg (Inkscape layers, cached in .llandau_cache/)
     deck       Deck (a slide: step, reveal, title, show_svg, live), order, typewrite
     live       live_scene, Deck.live: interactive 3D (Viewer) on chosen steps
@@ -45,6 +48,7 @@ from .theme import *
 from .layout import *
 from .text import *
 from .media import *
+from .cite import *
 from .deck import *
 from .live import live_scene
 from .viewer import Viewer, segment_ids

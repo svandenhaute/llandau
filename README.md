@@ -32,6 +32,11 @@ SLIDES = order(Results)
 scrubs through every animation, F goes full screen. `llandau pdf` and `llandau png` export one
 page per step.
 
+`self.cite("10.1038/s41586-021-03819-2", "arXiv:1706.03762")` puts "Jumper et al., Nature 596, 583
+(2021); Vaswani et al., arXiv:1706.03762 (2017)" in the footer; an article's URL works too, and
+`title=True` or `authors="all"` make it longer. Each lookup is cached in `.llandau_cache/references.json`,
+so the deck plays offline once built.
+
 ## Geometric models
 
 ![trp-cage's NMR models playing in a wgpu view: all atoms in flat shading, then the protein tube and side chains, lit](https://raw.githubusercontent.com/svandenhaute/llandau/main/docs/models.gif)

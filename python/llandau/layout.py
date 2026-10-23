@@ -166,6 +166,7 @@ class _Frame:
     safe   frame minus a margin
     title  band at the top of `safe`, where title() puts slide titles
     body   `safe` minus the title band (plus a gap) and a footer strip (slide number)
+    footer the strip below `body` (citations, the slide number at its right end)
     """
     margin = 0.3
     title_height = 0.8
@@ -190,6 +191,11 @@ class _Frame:
     def body(self) -> Region:
         s = self.safe
         return Region(s.x0, s.x1, s.y0 + self.footer_height, s.y1 - self.title_height - self.title_gap)
+
+    @property
+    def footer(self) -> Region:
+        s = self.safe
+        return Region(s.x0, s.x1, s.y0, s.y0 + self.footer_height)
 
     def __getattr__(self, name):  # R.left, R.ul, R.hsplit(...) etc. act on the full frame
         return getattr(self.full, name)
