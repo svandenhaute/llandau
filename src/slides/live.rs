@@ -66,6 +66,7 @@ pub(crate) const KEYS: &[(&str, &str)] = &[
     ("", "Slides"),
     ("→  Space", "next step"),
     ("←", "previous step"),
+    ("Shift → ←", "next / previous slide, whole"),
     ("Home  End", "first / last step"),
     ("R", "replay the step"),
     ("Cmd wheel", "zoom the slide (pinch too; over a 3D view: its camera)"),

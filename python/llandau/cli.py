@@ -1,7 +1,7 @@
 """Present a deck, or export it, using the SLIDES list from the scene file.
 Nothing is rendered ahead: the deck is drawn live, animations included.
 
-    llandau play slides.py                  # present (F: full screen, arrows: steps)
+    llandau play slides.py                  # present (F: full screen, arrows: steps, Shift: slides)
     llandau play slides.py --only Masses QM # a few slides
     llandau play slides.py --start 12       # from step 12
     llandau pdf slides.py                   # one page per step: slides.pdf

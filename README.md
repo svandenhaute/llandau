@@ -30,7 +30,7 @@ class Results(Deck):
 SLIDES = order(Results)
 ```
 
-`llandau play examples/slides.py` presents it: the arrows step forward and back, the wheel
+`llandau play examples/slides.py` presents it: the arrows step forward and back (with Shift: a whole slide), the wheel
 scrubs through every animation, F goes full screen. `llandau pdf` and `llandau png` export one
 page per step.
 

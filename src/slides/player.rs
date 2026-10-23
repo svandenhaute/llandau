@@ -1,7 +1,8 @@
 //! Presenting a timeline in a native window.
 //!
 //! Keys: → space PageDown ↓ play the next step (or finish the current one),
-//! ← PageUp ↑ go back one step, Home and End go to the first and last step,
+//! ← PageUp ↑ go back one step, Shift + → ← go to the next / previous slide whole
+//! (its last step), Home and End go to the first and last step,
 //! R replays the step, F toggles full screen, Escape leaves full screen or
 //! closes, Q closes. Scrolling scrubs through time, faster when scrolling fast.
 //! Over a live 3D view, the mouse and some keys go to it (see `live`; ? shows them).
@@ -22,7 +23,7 @@ use winit::window::{Fullscreen, WindowId};
 
 use super::live::Lives;
 use super::paint::{Image, Painter};
-use super::timeline::Timeline;
+use super::timeline::{Mark, Timeline};
 use super::zoom::Zoom;
 use crate::render::{Gpu, Offscreen};
 use crate::window::{self, Surface};
@@ -157,6 +158,11 @@ impl App<'_> {
         self.playing = None;
         self.step = self.step.saturating_sub(1);
         self.time = self.mark(self.step);
+    }
+
+    /// Shift + → ←: the next or previous slide, built up to its last step.
+    fn skip_slide(&mut self, offset: isize) {
+        self.jump(slide_end(&self.timeline.marks, self.step, offset));
     }
 
     fn jump(&mut self, step: usize) {
@@ -352,6 +358,8 @@ impl App<'_> {
             }
         }
         match key {
+            Key::Named(NamedKey::ArrowRight) if self.modifiers.shift_key() => self.skip_slide(1),
+            Key::Named(NamedKey::ArrowLeft) if self.modifiers.shift_key() => self.skip_slide(-1),
             Key::Named(NamedKey::ArrowRight | NamedKey::Space | NamedKey::PageDown | NamedKey::ArrowDown) => {
                 self.forward()
             }
@@ -504,5 +512,37 @@ impl ApplicationHandler for App<'_> {
         {
             target.window.request_redraw();
         }
+    }
+}
+
+/// The last step of the slide `offset` slides from the one of step `step` (clamped to the
+/// first and last slide): that slide whole. Slides without steps do not count.
+fn slide_end(marks: &[Mark], step: usize, offset: isize) -> usize {
+    let Some(current) = marks.get(step).map(|m| m.slide) else { return 0 };
+    let mut slides: Vec<usize> = marks.iter().map(|m| m.slide).collect();
+    slides.dedup();
+    let index = slides.iter().position(|&s| s == current).unwrap_or(0) as isize;
+    let target = slides[(index + offset).clamp(0, slides.len() as isize - 1) as usize];
+    marks.iter().rposition(|m| m.slide == target).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn marks(slides: &[usize]) -> Vec<Mark> {
+        slides.iter().enumerate().map(|(i, &slide)| Mark { time: i as f64, slide, notes: String::new() }).collect()
+    }
+
+    #[test]
+    fn shift_arrows_go_to_whole_slides() {
+        // slide 0: steps 0-1, slide 1: steps 2-4, slide 3 (2 has no steps): step 5
+        let marks = marks(&[0, 0, 1, 1, 1, 3]);
+        assert_eq!(slide_end(&marks, 0, 1), 4); // from the first step: the next slide, built up
+        assert_eq!(slide_end(&marks, 3, 1), 5);
+        assert_eq!(slide_end(&marks, 5, 1), 5); // the last slide stays
+        assert_eq!(slide_end(&marks, 3, -1), 1);
+        assert_eq!(slide_end(&marks, 1, -1), 1); // the first slide, whole
+        assert_eq!(slide_end(&[], 0, 1), 0);
     }
 }
