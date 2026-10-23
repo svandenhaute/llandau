@@ -1,12 +1,14 @@
-"""Citations for slides, from a DOI, an arXiv id or an article's web page.
+"""Citations for slides, from a DOI, an arXiv id, an article's web page or a book's ISBN.
 
     cite("10.1038/s41586-021-03819-2")           # Jumper et al., Nature 596, 583 (2021)
     cite("arXiv:1706.03762", title=True)         # Vaswani et al., “Attention Is All You Need”, arXiv:1706.03762 (2017)
     cite("https://www.nature.com/articles/s41586-021-03819-2", authors="all")
+    cite("isbn:978-0-486-13470-3")               # Lanczos, Variational Principles of Mechanics (2012)
     self.cite("10.1038/...")                      # in a Deck: in the footer strip, left
 
 The metadata comes from doi.org (CSL-JSON; arXiv papers have DOIs 10.48550/arXiv.<id>), a web
-page is read for its citation_doi meta tag. Every lookup is kept in .llandau_cache/references.json,
+page is read for its citation_doi meta tag, a book from Open Library by its ISBN (authors, title
+and year; its records can be incomplete). Every lookup is kept in .llandau_cache/references.json,
 so a deck built once plays offline. Journal names are abbreviated by llandau.journals where it
 knows the journal, else as Crossref does. Edit an entry in the cache to change a citation (e.g. a
 "container-title-short" Crossref lacks), delete it to look it up again.
@@ -41,6 +43,7 @@ _DOI = re.compile(r"10\.\d{4,9}/[^\s\"<>?#]+")
 _ARXIV_ID = r"(\d{4}\.\d{4,5}|[a-z\-]+(?:\.[A-Z]{2})?/\d{7})(?:v\d+)?"
 _ARXIV = re.compile(r"(?:arxiv[:./]\s*|arxiv\.org/(?:abs|pdf)/)" + _ARXIV_ID, re.IGNORECASE)
 _BARE_ARXIV = re.compile(_ARXIV_ID + r"(?:\.pdf)?", re.IGNORECASE)
+_ISBN = re.compile(r"\s*isbn[:\s]\s*([0-9Xx][0-9Xx\s-]*)\s*", re.IGNORECASE)
 
 
 def cite(*sources: str, size: float | None = None, sep: str = "; ", title: bool = False, authors: int | str = 1,
@@ -65,7 +68,7 @@ def citation(source: str, title: bool = False, authors: int | str = 1) -> str:
     else:
         who = ", ".join(names[:-1]) + " and " + names[-1] if len(names) > 1 else "".join(names)
     parts = [who] if who else []
-    if title and ref.get("title"):
+    if title and ref.get("title") and ref.get("type") != "book":  # a book's title is its venue
         parts.append(f"“{_clean(_first(ref['title']))}”")
     parts.append(_venue(ref))
     year = _year(ref)
@@ -73,11 +76,15 @@ def citation(source: str, title: bool = False, authors: int | str = 1) -> str:
 
 
 def reference(source: str) -> dict:
-    """The CSL-JSON metadata of a DOI, arXiv id or article URL (only the fields a citation needs),
-    from the cache or looked up and cached."""
+    """The CSL-JSON metadata of a DOI, arXiv id, article URL or "isbn:..." (only the fields a
+    citation needs), from the cache or looked up and cached."""
     key = _key(source)
     cache = _load_cache()
     if key in cache:
+        return cache[key]
+    if key.startswith("isbn:"):
+        cache[key] = _fetch_book(key[len("isbn:"):])
+        _save_cache(cache)
         return cache[key]
     doi = _doi(source)
     if doi is None:
@@ -91,8 +98,20 @@ def reference(source: str) -> dict:
 # --- finding the DOI ---------------------------------------------------------
 
 def _key(source: str) -> str:
+    if isbn := _isbn(source):
+        return f"isbn:{isbn}"
     doi = _doi(source)
     return doi.lower() if doi else source.strip()
+
+
+def _isbn(source: str) -> str | None:
+    """The ISBN in "isbn:978-0-486-13470-3" (or "ISBN 9780486134703"), digits only; else None."""
+    if not (m := _ISBN.fullmatch(source)):
+        return None
+    isbn = re.sub(r"[\s-]", "", m[1]).upper()
+    if len(isbn) not in (10, 13):
+        raise ValueError(f"not an ISBN-10 or ISBN-13: {source!r}")
+    return isbn
 
 
 def _doi(source: str) -> str | None:
@@ -160,6 +179,30 @@ def _fetch(doi: str) -> dict:
     return ref
 
 
+def _fetch_book(isbn: str) -> dict:
+    """A book's metadata from Open Library, as CSL-JSON: type "book", title, authors, year, ISBN."""
+    url = f"https://openlibrary.org/api/books?bibkeys=ISBN:{isbn}&format=json&jscmd=data"
+    try:
+        found = json.loads(_get(url, "application/json")).get(f"ISBN:{isbn}")
+    except (urllib.error.URLError, TimeoutError) as e:
+        raise RuntimeError(f"looking up ISBN {isbn} needs the network ({e}); it isn't cached yet") from None
+    if not found:
+        raise ValueError(f"ISBN {isbn} is not on Open Library; add it to the cache by hand")
+    names = [a["name"] for a in found.get("authors", [])]
+    single = [n for n in names if "," not in n and " and " not in n]  # some records list "A, B, C" too
+    ref = {"type": "book", "ISBN": isbn, "title": found.get("title", ""),
+           "author": [_split_name(n) for n in dict.fromkeys(single or names)]}
+    if year := re.search(r"\d{4}", found.get("publish_date", "")):
+        ref["issued"] = {"date-parts": [[int(year[0])]]}
+    return ref
+
+
+def _split_name(name: str) -> dict:
+    """ "Herbert Goldstein" -> family Goldstein, given Herbert; "L.D Landau" -> Landau, L.D."""
+    given, _, family = name.strip().rpartition(" ")
+    return {"family": family, "given": given} if given else {"family": family}
+
+
 def _load_cache() -> dict:
     try:
         return json.loads((CACHE_DIR / CACHE_FILE).read_text())
@@ -196,6 +239,8 @@ def _name(author: dict) -> str:
 
 
 def _venue(ref: dict) -> str:
+    if ref.get("type") == "book":
+        return _clean(_first(ref.get("title")))
     doi = ref.get("DOI", "")
     if doi.lower().startswith("10.48550/arxiv."):
         arxiv_id = doi[len("10.48550/arxiv."):]

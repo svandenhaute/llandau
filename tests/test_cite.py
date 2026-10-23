@@ -140,3 +140,30 @@ def test_journals_override_crossref(lookups, monkeypatch):
     monkeypatch.setitem(REFS, "10.1000/unlisted", dict(jctc, DOI="10.1000/unlisted", **{
         "container-title": "Journal of Unlisted Results", "container-title-short": "J. Unlisted Res."}))
     assert citation("10.1000/unlisted").startswith("Grimme, J. Unlisted Res. 15")  # unknown: Crossref's
+
+
+GOLDSTEIN = {"ISBN:9788131758915": {
+    "title": "Classical Mechanics", "publish_date": "Nov 01, 2011",
+    "authors": [{"name": "Herbert Goldstein, Charles Poole, John Safko"}, {"name": "Herbert Goldstein"},
+                {"name": "Charles P. Poole"}, {"name": "John L. Safko"}],
+}}
+
+
+def test_books_by_isbn(tmp_path, monkeypatch):
+    seen = []
+
+    def get(url, accept):
+        seen.append(url)
+        return json.dumps(GOLDSTEIN if "9788131758915" in url else {}).encode()
+
+    monkeypatch.setattr(cite_module, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(cite_module, "_get", get)
+    # the combined author entry is left out; a book's title is its venue, title=True adds nothing
+    assert citation("isbn:978-81-317-5891-5") == "Goldstein et al., Classical Mechanics (2011)"
+    assert citation("ISBN 9788131758915", authors="all", title=True) == \
+        "Goldstein, Poole and Safko, Classical Mechanics (2011)"
+    assert len(seen) == 1  # cached under its digits
+    with pytest.raises(ValueError, match="Open Library"):
+        citation("isbn:0000000000")
+    with pytest.raises(ValueError, match="ISBN-10 or ISBN-13"):
+        citation("isbn:12345")
