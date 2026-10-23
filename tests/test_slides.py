@@ -394,3 +394,14 @@ def test_bracket_without_ticks_is_an_underline():
     assert line[0].height == pytest.approx(0, abs=1e-9)
     assert line[0].width == pytest.approx(e["a"].width)
     assert line[1].get_top()[1] < line[0].get_y()
+
+
+def test_text_parts():
+    for s in ("the {word} Hamiltonian", "$<->$ {word} Hamiltonian"):  # plain text, markup
+        plain = text(s.replace("{word}", "Riemannian"))
+        t = text(s, word="Riemannian")
+        assert np.allclose(plain.get_all_points(), t.get_all_points())
+        assert len(t["word"]) == len("Riemannian")
+        assert t["word"].get_left()[0] > t[0].get_left()[0]
+    lines = text("a {word}\nb", word='"quoted"')
+    assert lines.plain_text and len(lines["word"]) == len('"quoted"')

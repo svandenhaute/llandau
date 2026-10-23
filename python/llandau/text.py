@@ -42,13 +42,32 @@ def text(s: str, size: float | None = None, color=None, weight=NORMAL, slant=NOR
          typst_markup: bool | None = None, font: str | None = None, **kwargs):
     """Single text object, typeset with Typst. Contains unescaped $...$ -> the string is Typst
     markup (so *, _, #, ~ have their Typst meaning there; force either way with typst_markup=).
-    A literal dollar is \\$. Lines break only at explicit newlines. font: other than the deck's."""
+    A literal dollar is \\$. Lines break only at explicit newlines. font: other than the deck's.
+    Parts as in eq(): text("{word} and more", word="Riemannian")["word"].set_color(RED)."""
+    parts = _parts(s, kwargs)
     if typst_markup is None:
         typst_markup = bool(_MATH.search(s))
-    if typst_markup:
-        return typst(s, size=size, color=color, weight=weight, slant=slant, font=font, **kwargs)
-    mob = typst(_plain(s), size=size, color=color, weight=weight, slant=slant, font=font, **kwargs)
-    mob.plain_text = True
+    style = dict(size=size, color=color, weight=weight, slant=slant, font=font)
+    if not parts:
+        mob = typst(s if typst_markup else _plain(s), **style, **kwargs)
+    elif typst_markup:
+        def source(fills):
+            return _PART.sub(lambda m: _part(m, parts, fills, lambda p: f"[{p}]"), s)
+        mob = _typeset_parts(source, parts, s, style, kwargs)
+    else:
+        def source(fills):  # the text between the parts as strings, as _plain() does
+            def line(text_line):
+                out = []
+                for piece in re.split(r"(\{\w+\})", text_line):
+                    m = _PART.fullmatch(piece)
+                    if m and m[1] in parts:  # #text("part")
+                        out.append(_part(m, parts, fills, lambda p: f"({_typst_string(p)[1:]})"))
+                    elif piece:
+                        out.append(_typst_string(piece))
+                return "".join(out)
+            return " \\\n".join(line(text_line) for text_line in s.replace(r"\$", "$").split("\n"))
+        mob = _typeset_parts(source, parts, s, style, kwargs)
+    mob.plain_text = not typst_markup
     return mob
 
 
@@ -74,35 +93,50 @@ def eq(s: str, size: float | None = None, **kwargs):
         e["length"].set_color(BLUE)
         bracket(e["length"], "geodesic\nlength")
     Keep operators outside the parts: a part is spaced as one operand. Other kwargs go to SVGMobject."""
-    parts = {name: kwargs.pop(name) for name in dict.fromkeys(_PART.findall(s)) if name in kwargs}
+    parts = _parts(s, kwargs)
     if not parts:
         return typst(f"$ {s} $", size=size, **kwargs)
+
+    def source(fills):
+        return f"$ {_PART.sub(lambda m: _part(m, parts, fills, lambda p: f'[$ {p} $]'), s)} $"
+    style = dict(size=size, color=kwargs.pop("color", None), weight=kwargs.pop("weight", NORMAL),
+                 slant=kwargs.pop("slant", NORMAL), font=kwargs.pop("font", None))
+    return _typeset_parts(source, parts, s, style, kwargs)
+
+
+def _parts(s: str, kwargs: dict) -> dict:
+    """The keyword arguments named by a {name} in s, taken out of kwargs."""
+    return {name: kwargs.pop(name) for name in dict.fromkeys(_PART.findall(s)) if name in kwargs}
+
+
+def _part(m, parts: dict, fills: dict | None, body) -> str:
+    """A {name} match as #text(...) around body(the part), in its tag colour if fills; others stay."""
+    if m[1] not in parts:
+        return m[0]
+    args = body(parts[m[1]])
+    if fills:  # #text(fill: c)[...] or #text(fill: c, "...")
+        args = f"(fill: {fills[m[1]]})" + args if args.startswith("[") else f"(fill: {fills[m[1]]}, {args[1:]}"
+    return f"#text{args}"  # the same element on both pages: the same layout
+
+
+def _typeset_parts(source, parts: dict, s: str, style: dict, kwargs: dict) -> SVGMobject:
+    """source(None) as shown, with mob["name"] the glyphs of each part: a second page has
+    source(fills), each part in its own colour, and path i of one page is path i of the other."""
     tags = {(1, k, 254): name for k, name in enumerate(parts, start=1)}  # colours of nothing else
     fills = {name: f"rgb{tag}" for tag, name in tags.items()}
-
-    def substitute(tagged: bool) -> str:
-        def part(m):
-            if m[1] not in parts:
-                return m[0]
-            fill = f"(fill: {fills[m[1]]})" if tagged else ""
-            return f"#text{fill}[$ {parts[m[1]]} $]"  # the same element on both pages: the same layout
-        return f"$ {_PART.sub(part, s)} $"
-
-    # page 1 as shown, page 2 with each part in its own colour: path i of one is path i of the other
-    doc = _document(substitute(False) + "\n#pagebreak()\n" + substitute(True), size, kwargs.pop("color", None),
-                    kwargs.pop("weight", NORMAL), kwargs.pop("slant", NORMAL), kwargs.pop("font", None))
+    doc = _document(source(None) + "\n#pagebreak()\n" + source(fills), **style)
     shown, tagged = _compile_pages(doc, 2)
     mob = SVGMobject(str(shown), height=None, **kwargs).scale(TYPST_SCALE)
     paths = SVGMobject(str(tagged), height=None).submobjects
     if len(paths) != len(mob.submobjects):
-        raise RuntimeError(f"eq: the parts of {s!r} changed its layout")
+        raise RuntimeError(f"the parts of {s!r} changed its layout")
     for glyph, path in zip(mob.submobjects, paths):
         name = tags.get(tuple(int(round(255 * c)) for c in path.get_color().to_rgb()))
         if name is not None:
             mob.id_to_vgroup_dict.setdefault(name, VGroup()).add(glyph)
     missing = [name for name in parts if name not in mob.id_to_vgroup_dict]
     if missing:
-        raise ValueError(f"eq: parts {missing} of {s!r} draw nothing")
+        raise ValueError(f"parts {missing} of {s!r} draw nothing")
     return mob
 
 
