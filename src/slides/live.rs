@@ -28,7 +28,7 @@ use crate::Viewer;
 use crate::plots::{self, PLOTS_HEIGHT};
 use crate::recording::{Recording, State as ViewState};
 use crate::render::Gpu;
-use crate::window::{self, PANEL_WIDTH, PLAY_INTERVAL, Scrub, frame_controls, view_controls};
+use crate::window::{self, PANEL_WIDTH, Playback, Scrub, frame_controls, view_controls};
 
 /// How long the camera takes to move to a step's camera, on the step's clock
 /// (llandau.live.CAMERA_MOVE makes the step last that long).
@@ -48,6 +48,7 @@ const OVERLAY_HEIGHT: f32 = 600.0;
 pub(crate) const KEYS: &[(&str, &str)] = &[
     ("", "Live view"),
     ("P", "play / pause"),
+    ("[  ]", "play slower / faster"),
     (", .", "previous / next frame (Shift: 5%)"),
     ("D", "discrete states"),
     ("drag", "rotate (right or Shift: pan)"),
@@ -100,8 +101,7 @@ struct State {
     applied: Option<f64>,
     /// the step's view at its end: what 0 goes back to
     home: Option<ViewState>,
-    playing: bool,
-    last_step: Option<Instant>,
+    playback: Playback,
     /// the vector lengths as the scene set them: the panel's sliders go to 4 x that
     initial_scales: Vec<(String, f32)>,
 }
@@ -214,7 +214,7 @@ impl Lives {
         for (viewer, state) in self.states.iter_mut().enumerate() {
             if !shown.contains(&viewer) {
                 state.entered = None;
-                state.playing = false;
+                state.playback.set_playing(false);
             }
         }
         for span in active {
@@ -276,15 +276,7 @@ impl Lives {
                 continue;
             }
             let mut v = self.viewers[index].bind(py).borrow_mut();
-            if state.playing {
-                if state.last_step.is_none_or(|t| t.elapsed() >= PLAY_INTERVAL) {
-                    state.last_step = Some(Instant::now());
-                    let count = v.num_frames().max(1);
-                    let frame = (v.frame + 1) % count;
-                    v.set_frame(frame);
-                }
-                moving = true;
-            }
+            moving |= state.playback.advance(&mut v);
         }
         moving
     }
@@ -397,7 +389,6 @@ impl Lives {
                 let keys: Vec<(&str, &str)> = rows.iter().map(|(k, a)| (k.as_str(), a.as_str())).collect();
                 let events = if is_focused { std::mem::take(&mut self.events) } else { Vec::new() };
                 let state = &mut self.states[live.viewer];
-                let mut playing = state.playing;
                 let initial_scales = state.initial_scales.clone();
                 again |= overlay.draw(gpu, &target.view, pixels, dark, events, |ui| {
                     if panel {
@@ -412,7 +403,7 @@ impl Lives {
                                 ui.style_mut().visuals = egui::Visuals::dark();
                                 egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                                     ui.set_max_width(PANEL_WIDTH - 24.0);
-                                    frame_controls(ui, &mut v, &mut playing, "P");
+                                    frame_controls(ui, &mut v, &mut state.playback, "P");
                                     ui.separator();
                                     view_controls(ui, &mut v, &initial_scales, false);
                                     if !v.show_plots {
@@ -434,7 +425,6 @@ impl Lives {
                         plots::help(ui, &keys, 15.0);
                     }
                 });
-                state.playing = playing;
             }
         }
         self.events.clear();
@@ -618,7 +608,9 @@ impl Lives {
         let mut v = self.viewers[viewer].bind(py).borrow_mut();
         let state = &mut self.states[viewer];
         match key {
-            "p" => state.playing = !state.playing,
+            "p" => state.playback.toggle(),
+            "[" => state.playback.slower(),
+            "]" => state.playback.faster(),
             "?" => self.help = !self.help,
             "h" => self.panel = !self.panel,
             "0" => match &state.home {

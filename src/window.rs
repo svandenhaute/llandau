@@ -31,6 +31,8 @@ use crate::render::{Gpu, Offscreen};
 
 pub(crate) const PANEL_WIDTH: f32 = 300.0;
 pub(crate) const PLAY_INTERVAL: Duration = Duration::from_millis(33);
+/// Playing speeds, [ and ] halving and doubling it: from 1/16 to 16 times a frame per PLAY_INTERVAL.
+const MAX_SPEED: f64 = 16.0;
 /// Wheel or trackpad points per frame when scrubbing slowly, for up to this many frames.
 const SCROLL_PER_FRAME: f32 = 12.0;
 const SHORT_TRAJECTORY: f32 = 200.0;
@@ -47,12 +49,13 @@ const COPY: &str = if cfg!(target_os = "macos") { "Cmd C" } else { "Ctrl C" };
 /// The keys hinted in the panel (in monospace: egui's text font lacks the arrows),
 /// for the test that egui can draw them.
 #[cfg(test)]
-pub(crate) const HINTS: [&str; 13] = ["← →", "Space", "D", "R", "T", "L", "S", "⇧S", "C", "1", "9", COPY, "?"];
+pub(crate) const HINTS: [&str; 14] = ["← →", "Space", "[ ]", "D", "R", "T", "L", "S", "⇧S", "C", "1", "9", COPY, "?"];
 
 /// The explorer's keys, as its help shows them ("" keys head groups).
 pub(crate) const KEYS: &[(&str, &str)] = &[
     ("", "Trajectory"),
     ("Space  P", "play / pause"),
+    ("[  ]", "play slower / faster"),
     ("← →  , .", "previous / next frame (Shift: 5%)"),
     ("Home  End", "first / last frame"),
     ("D", "discrete states"),
@@ -296,8 +299,7 @@ struct App<'a> {
     surface: Option<Target>,
     /// the 3D view's rectangle in points, from the last layout
     viewport: egui::Rect,
-    playing: bool,
-    last_step: Instant,
+    playback: Playback,
     scrub: Scrub,
     initial_scales: Vec<(String, f32)>,
     status: String,
@@ -341,8 +343,7 @@ pub fn explore(viewer: &mut Viewer, py: Python<'_>, options: Options) -> PyResul
             egui: egui::Context::default(),
             surface: None,
             viewport: egui::Rect::NOTHING,
-            playing: false,
-            last_step: Instant::now(),
+            playback: Playback::default(),
             scrub: Scrub::default(),
             initial_scales,
             status: String::new(),
@@ -382,12 +383,7 @@ impl App<'_> {
     }
 
     fn redraw(&mut self) {
-        if self.playing && self.last_step.elapsed() >= PLAY_INTERVAL {
-            self.last_step = Instant::now();
-            let count = self.viewer.num_frames().max(1);
-            let frame = (self.viewer.frame + 1) % count;
-            self.viewer.set_frame(frame);
-        }
+        self.playback.advance(self.viewer);
         let Some(mut target) = self.surface.take() else { return };
         let window = target.surface.window.clone();
         let size = target.surface.size();
@@ -458,7 +454,7 @@ impl App<'_> {
             _ => {}
         }
         self.frames_drawn += 1;
-        if self.playing || !matches!(self.record, Record::Off) || self.options.screenshot.is_some() || settling {
+        if self.playback.playing || !matches!(self.record, Record::Off) || self.options.screenshot.is_some() || settling {
             window.request_redraw();
         }
         self.surface = Some(target);
@@ -510,7 +506,13 @@ impl App<'_> {
             }
         }
         if pressed(Key::Space) || pressed(Key::P) {
-            self.playing = !self.playing;
+            self.playback.toggle();
+        }
+        if pressed(Key::OpenBracket) {
+            self.playback.slower();
+        }
+        if pressed(Key::CloseBracket) {
+            self.playback.faster();
         }
         let count = v.num_frames().max(1) as i64;
         for (key, c) in [(Key::ArrowLeft, ','), (Key::ArrowRight, '.')] {
@@ -582,7 +584,7 @@ impl App<'_> {
             ui.label(info.clone());
             ui.separator();
         }
-        frame_controls(ui, self.viewer, &mut self.playing, "Space");
+        frame_controls(ui, self.viewer, &mut self.playback, "Space");
         self.record_controls(ui);
         ui.separator();
         view_controls(ui, self.viewer, &self.initial_scales, true);
@@ -620,8 +622,75 @@ impl App<'_> {
     }
 }
 
-/// The frame row of the panel: the slider, play / pause (its key hinted), discrete states.
-pub(crate) fn frame_controls(ui: &mut egui::Ui, v: &mut Viewer, playing: &mut bool, play_key: &str) {
+/// Playing a trajectory: a frame per PLAY_INTERVAL times `speed`, however often it is asked
+/// to advance (frames due pile up below speed 1, several are taken at once above it).
+#[derive(Debug)]
+pub(crate) struct Playback {
+    pub playing: bool,
+    pub speed: f64,
+    last: Option<Instant>,
+    /// frames due, not shown yet
+    due: f64,
+}
+
+impl Default for Playback {
+    fn default() -> Self {
+        Self { playing: false, speed: 1.0, last: None, due: 0.0 }
+    }
+}
+
+impl Playback {
+    pub(crate) fn toggle(&mut self) {
+        self.set_playing(!self.playing);
+    }
+
+    pub(crate) fn set_playing(&mut self, playing: bool) {
+        self.playing = playing;
+        self.last = None;
+        self.due = 0.0;
+    }
+
+    pub(crate) fn faster(&mut self) {
+        self.speed = (self.speed * 2.0).min(MAX_SPEED);
+    }
+
+    pub(crate) fn slower(&mut self) {
+        self.speed = (self.speed / 2.0).max(1.0 / MAX_SPEED);
+    }
+
+    /// "×2", "×1/4": the speed as the panel shows it.
+    pub(crate) fn label(&self) -> String {
+        if self.speed >= 1.0 { format!("×{}", self.speed) } else { format!("×1/{}", (1.0 / self.speed).round()) }
+    }
+
+    /// Show the frames due since the last call (looping); whether playing.
+    pub(crate) fn advance(&mut self, v: &mut Viewer) -> bool {
+        if !self.playing {
+            return false;
+        }
+        let steps = self.take(Instant::now());
+        if steps > 0 {
+            let count = v.num_frames().max(1);
+            v.set_frame((v.frame + steps) % count);
+        }
+        true
+    }
+
+    /// The whole frames due at `now`; the first call after starting takes one at once.
+    fn take(&mut self, now: Instant) -> usize {
+        self.due += match self.last {
+            Some(last) => now.duration_since(last).as_secs_f64() / PLAY_INTERVAL.as_secs_f64() * self.speed,
+            None => 1.0,
+        };
+        self.last = Some(now);
+        let steps = self.due.floor();
+        self.due -= steps;
+        steps as usize
+    }
+}
+
+/// The frame row of the panel: the slider, play / pause (its key hinted) and the speed, discrete states.
+pub(crate) fn frame_controls(ui: &mut egui::Ui, v: &mut Viewer, playback: &mut Playback, play_key: &str) {
     let count = v.num_frames().max(1);
     let mut frame = v.frame;
     ui.horizontal(|ui| {
@@ -632,10 +701,18 @@ pub(crate) fn frame_controls(ui: &mut egui::Ui, v: &mut Viewer, playing: &mut bo
         hint(ui, ", .");
     });
     ui.horizontal(|ui| {
-        if ui.button(if *playing { "Pause" } else { "Play" }).clicked() {
-            *playing = !*playing;
+        if ui.button(if playback.playing { "Pause" } else { "Play" }).clicked() {
+            playback.toggle();
         }
         hint(ui, play_key);
+        if ui.small_button("−").clicked() {
+            playback.slower();
+        }
+        ui.label(playback.label());
+        if ui.small_button("+").clicked() {
+            playback.faster();
+        }
+        hint(ui, "[ ]");
         if v.num_discrete_frames() > 0 {
             let mut on = v.scene.scrub_discrete;
             if ui.checkbox(&mut on, "scrub discrete").changed() {
@@ -1051,7 +1128,7 @@ impl ApplicationHandler for App<'_> {
             event_loop.exit();
             return;
         }
-        if self.playing
+        if self.playback.playing
             && let Some(target) = &self.surface
         {
             target.surface.window.request_redraw();
@@ -1062,6 +1139,30 @@ impl ApplicationHandler for App<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playback_speed_sets_the_frames_per_interval() {
+        let mut playback = Playback::default();
+        playback.toggle();
+        let start = Instant::now();
+        assert_eq!(playback.take(start), 1); // the next frame at once
+        assert_eq!(playback.take(start + PLAY_INTERVAL * 3), 3);
+        playback.faster();
+        playback.faster();
+        assert_eq!(playback.label(), "×4");
+        assert_eq!(playback.take(start + PLAY_INTERVAL * 5), 8);
+        for _ in 0..10 {
+            playback.slower();
+        }
+        assert_eq!(playback.label(), "×1/16"); // the slowest
+        let t = start + PLAY_INTERVAL * 5;
+        let taken: usize = (1..=32).map(|k| playback.take(t + PLAY_INTERVAL * k)).sum();
+        assert_eq!(taken, 2); // a frame per 16 intervals
+        for _ in 0..10 {
+            playback.faster();
+        }
+        assert_eq!(playback.label(), "×16"); // the fastest
+    }
 
     #[test]
     fn scrolling_accelerates() {
