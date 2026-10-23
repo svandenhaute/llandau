@@ -26,6 +26,7 @@ JOURNALS = {
     "Proceedings of the National Academy of Sciences": "Proc. Natl. Acad. Sci. U.S.A.",
     "Nature Communications": "Nat. Commun.",
     "Scientific Reports": "Sci. Rep.",
+    "Scientific Data": "Sci. Data",
     "PLOS ONE": "PLoS One",
     "Cell": "Cell",
     "Joule": "Joule",
