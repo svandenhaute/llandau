@@ -152,13 +152,25 @@ impl App<'_> {
         self.timeline.marks.get(step).is_some_and(|m| m.looping)
     }
 
+    fn period(&self, step: usize) -> f64 {
+        self.mark(step) - self.step_start(step)
+    }
+
+    /// From a looping step to `step`: a looping step as long goes on at the same phase (what plays in both,
+    /// such as a live view, carries on without a jump); any other starts from its start.
+    fn leave_loop_for(&mut self, step: usize) {
+        let phase = (self.time - self.step_start(self.step)).clamp(0.0, self.period(self.step));
+        let same = self.looping(step) && (self.period(step) - self.period(self.step)).abs() < 1e-6;
+        self.playing = None;
+        self.step = step;
+        self.time = self.step_start(step) + if same { phase.min(self.period(step) - 1e-9) } else { 0.0 };
+        self.play_to(self.mark(step));
+    }
+
     fn forward(&mut self) {
         if self.looping(self.step) && self.step < self.last_step() {
-            // a looping step has no end to finish: on to the next step, from the looping step's end
-            self.playing = None;
-            self.time = self.mark(self.step);
-            self.step += 1;
-            self.play_to(self.mark(self.step));
+            // a looping step has no end to finish: on to the next step
+            self.leave_loop_for(self.step + 1);
         } else if let Some((_, _, target)) = self.playing.take() {
             self.time = target; // finish the step at once
         } else if self.time < self.mark(self.step) - 1e-9 {
@@ -170,6 +182,10 @@ impl App<'_> {
     }
 
     fn back(&mut self) {
+        if self.looping(self.step) && self.step > 0 && self.looping(self.step - 1) {
+            self.leave_loop_for(self.step - 1);
+            return;
+        }
         self.playing = None;
         self.step = self.step.saturating_sub(1);
         self.time = self.mark(self.step);

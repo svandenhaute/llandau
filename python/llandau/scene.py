@@ -307,8 +307,8 @@ class _Builder:
 
     def mark(self, t: float, slide: int, notes: str, loop: bool = False):
         self.slides.add_mark(t, slide, notes, loop)
-        for viewer, rect, start, enter, camera, opens, play, playing in self.pending_lives:
-            self.slides.add_live(viewer, rect, start, t, enter, camera, opens, play, playing)
+        for viewer, rect, start, enter, camera, opens, play, playing, frame in self.pending_lives:
+            self.slides.add_live(viewer, rect, start, t, enter, camera, opens, play, playing, frame)
         self.pending_lives = []
 
     def live(self, scene, name: str, theme: str, region, view: dict, opens=None, state: dict | None = None,
@@ -333,7 +333,8 @@ class _Builder:
             live.apply_view(v, view, camera=False)
 
         self.pending_lives.append((viewer, rect(region), scene.time, enter, camera,
-                                   rect(opens) if opens is not None else None, play, bool(view.get("playing"))))
+                                   rect(opens) if opens is not None else None, play, bool(view.get("playing")),
+                                   view.get("frame") if view.get("playing") else None))
 
 
 class Scene:
@@ -521,7 +522,9 @@ class Scene:
         the step that starts here (as in manim-slides). With `loop`, the step ending
         here replays from its start until the presenter moves on (→ goes straight to
         the next step); a live view playing in it runs on the same wall clock, so an
-        animation one playback period long stays in step with it."""
+        animation one playback period long stays in step with it. Moving between two
+        looping steps of the same length keeps the phase: a dot looping in both goes
+        on without a jump."""
         if self.time > self._slide_start and self.time != self._last_mark:
             self._builder.mark(self.time, self._slide, self._notes, loop)
             self._last_mark = self.time

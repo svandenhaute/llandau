@@ -85,6 +85,9 @@ pub struct Entry {
     pub play: Option<Vec<(f64, Py<PyDict>)>>,
     /// the trajectory plays (looping) from the step's start, as P would start it
     pub playing: bool,
+    /// with `playing`: the frame it plays from at the step's start; entered later (a looping step going on at
+    /// the same phase), the frames due since then are skipped, so it plays as if it had started with the step
+    pub frame: Option<usize>,
 }
 
 struct Target {
@@ -268,6 +271,12 @@ impl Lives {
             state.play = recording.map(|rec| (timeline.lives[span].span[0], rec));
             state.applied = None;
             if entry.playing {
+                if let Some(frame) = entry.frame {
+                    let elapsed = (time - timeline.lives[span].span[0]).max(0.0);
+                    let due = (elapsed / window::PLAY_INTERVAL.as_secs_f64()).floor() as usize;
+                    let count = v.num_frames().max(1);
+                    v.set_frame((frame + due) % count);
+                }
                 state.playback.set_playing(true);
             }
         }

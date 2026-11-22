@@ -188,8 +188,9 @@ impl Slides {
     /// (keyframes: (seconds from `start`, state dict)) is played on the step's
     /// clock. With `opens` (another rectangle), a click on the view grows it to
     /// that rectangle and a click puts it back. With `playing`, the trajectory plays
-    /// (looping) from the step's start. Not drawn by render().
-    #[pyo3(signature = (viewer, rect, start, end, enter = None, camera = None, opens = None, play = None, playing = false))]
+    /// (looping) from the step's start, from `frame` when given (entered later, as if it had
+    /// started with the step). Not drawn by render().
+    #[pyo3(signature = (viewer, rect, start, end, enter = None, camera = None, opens = None, play = None, playing = false, frame = None))]
     #[allow(clippy::too_many_arguments)]
     fn add_live(
         &mut self,
@@ -202,6 +203,7 @@ impl Slides {
         opens: Option<(f32, f32, f32, f32)>,
         play: Option<Vec<(f64, Py<PyDict>)>>,
         playing: bool,
+        frame: Option<usize>,
     ) -> usize {
         let viewer = self.lives.viewer_index(viewer);
         self.timeline.lives.push(LiveSpan {
@@ -210,7 +212,7 @@ impl Slides {
             span: [start, end],
             opens: opens.map(|r| [r.0, r.1, r.2, r.3]),
         });
-        self.lives.entries.push(Entry { enter, camera, play, playing });
+        self.lives.entries.push(Entry { enter, camera, play, playing, frame });
         self.timeline.lives.len() - 1
     }
 
