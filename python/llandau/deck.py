@@ -53,10 +53,10 @@ class Deck(Scene):
         self.wait(MIN_STEP)
         self.next_slide(notes=notes)
 
-    def next_slide(self, notes: str = "", **kwargs):
+    def next_slide(self, notes: str = "", loop: bool = False, **kwargs):
         if self.time < self._live_until:
             self.wait(self._live_until - self.time)
-        return super().next_slide(notes, **kwargs)
+        return super().next_slide(notes, loop=loop, **kwargs)
 
     def reveal(self, *mobs, anim=None, run_time: float | None = None, lag: float = 0,
                replace=None, pause: bool = True, notes: str = ""):
@@ -88,7 +88,8 @@ class Deck(Scene):
         put several views on one step (a grid: one call per cell of R.body.grid(2, 5, gap=0.2)).
 
         view     settings applied when the step starts (see llandau.live): camera, frame, style,
-                 sidechains, shading, fog, occlusion, coloring, scrub_discrete, show, hide, plots
+                 sidechains, shading, fog, occlusion, coloring, scrub_discrete, show, hide, plots,
+                 playing (the trajectory plays, looping, from the step's start)
         state    the whole view as the explorer copies it: a dict or a JSON file; the keywords
                  override its entries. Its camera is moved to, like camera=.
         play     keyframes the explorer recorded (a JSON file, or a list of dicts with "t"),

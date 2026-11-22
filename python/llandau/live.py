@@ -18,8 +18,10 @@
 A view (the keywords of Deck.live) sets, when its step starts: camera (a dict as
 viewer.camera; the camera moves there smoothly over the first 0.9 s of the step),
 frame, style, sidechains, shading, fog, occlusion, coloring, scrub_discrete,
-show / hide (layer names), and plots (True: the viewer's plots large under its
-3D view). Consecutive steps of the same scene keep everything else, including
+show / hide (layer names), plots (True: the viewer's plots large under its
+3D view), and playing (True: the trajectory plays, looping, from the step's
+start, a frame per 33 ms; load it forward then backward to play it back and
+forth). Consecutive steps of the same scene keep everything else, including
 where the presenter turned it. On a slide, fog is 0 unless a view or state sets
 it (the explorer fogs large structures by default).
 
@@ -60,7 +62,7 @@ SCENES = {}
 # view key -> viewer attribute, in the order applied (frame after scrub_discrete)
 _ATTRIBUTES = {"style": "style", "sidechains": "sidechains", "shading": "shading", "fog": "fog", "occlusion": "occlusion",
                "coloring": "coloring", "scrub_discrete": "scrub_discrete", "frame": "frame", "plots": "show_plots"}
-VIEW_KEYS = set(_ATTRIBUTES) | {"show", "hide", "camera"}
+VIEW_KEYS = set(_ATTRIBUTES) | {"show", "hide", "camera", "playing"}
 
 
 def live_scene(name: str):

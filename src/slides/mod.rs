@@ -187,8 +187,9 @@ impl Slides {
     /// (a camera dict, moved to over the first 0.9 s of the step), or `play`
     /// (keyframes: (seconds from `start`, state dict)) is played on the step's
     /// clock. With `opens` (another rectangle), a click on the view grows it to
-    /// that rectangle and a click puts it back. Not drawn by render().
-    #[pyo3(signature = (viewer, rect, start, end, enter = None, camera = None, opens = None, play = None))]
+    /// that rectangle and a click puts it back. With `playing`, the trajectory plays
+    /// (looping) from the step's start. Not drawn by render().
+    #[pyo3(signature = (viewer, rect, start, end, enter = None, camera = None, opens = None, play = None, playing = false))]
     #[allow(clippy::too_many_arguments)]
     fn add_live(
         &mut self,
@@ -200,6 +201,7 @@ impl Slides {
         camera: Option<Py<PyDict>>,
         opens: Option<(f32, f32, f32, f32)>,
         play: Option<Vec<(f64, Py<PyDict>)>>,
+        playing: bool,
     ) -> usize {
         let viewer = self.lives.viewer_index(viewer);
         self.timeline.lives.push(LiveSpan {
@@ -208,15 +210,16 @@ impl Slides {
             span: [start, end],
             opens: opens.map(|r| [r.0, r.1, r.2, r.3]),
         });
-        self.lives.entries.push(Entry { enter, camera, play });
+        self.lives.entries.push(Entry { enter, camera, play, playing });
         self.timeline.lives.len() - 1
     }
 
     /// The end of a step: the presentation pauses at `time`. `slide` numbers
-    /// the slide it belongs to; `notes` are the step's notes.
-    #[pyo3(signature = (time, slide = 0, notes = String::new()))]
-    fn add_mark(&mut self, time: f64, slide: usize, notes: String) {
-        self.timeline.marks.push(Mark { time, slide, notes });
+    /// the slide it belongs to; `notes` are the step's notes. With `looping`, the step
+    /// replays from its start until the presenter moves on.
+    #[pyo3(signature = (time, slide = 0, notes = String::new(), looping = false))]
+    fn add_mark(&mut self, time: f64, slide: usize, notes: String, looping: bool) {
+        self.timeline.marks.push(Mark { time, slide, notes, looping });
     }
 
     /// (time, slide, notes) of each step.

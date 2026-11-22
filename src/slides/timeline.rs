@@ -157,6 +157,8 @@ pub struct Mark {
     pub time: f64,
     pub slide: usize,
     pub notes: String,
+    /// the step ending here replays from its start until the presenter moves on
+    pub looping: bool,
 }
 
 #[derive(Default)]

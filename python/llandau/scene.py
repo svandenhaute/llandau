@@ -305,10 +305,10 @@ class _Builder:
             kind, g = geometry
             self.slides.add_clip(kind, g, g, z, t0, t1, (t0, t0))
 
-    def mark(self, t: float, slide: int, notes: str):
-        self.slides.add_mark(t, slide, notes)
-        for viewer, rect, start, enter, camera, opens, play in self.pending_lives:
-            self.slides.add_live(viewer, rect, start, t, enter, camera, opens, play)
+    def mark(self, t: float, slide: int, notes: str, loop: bool = False):
+        self.slides.add_mark(t, slide, notes, loop)
+        for viewer, rect, start, enter, camera, opens, play, playing in self.pending_lives:
+            self.slides.add_live(viewer, rect, start, t, enter, camera, opens, play, playing)
         self.pending_lives = []
 
     def live(self, scene, name: str, theme: str, region, view: dict, opens=None, state: dict | None = None,
@@ -333,7 +333,7 @@ class _Builder:
             live.apply_view(v, view, camera=False)
 
         self.pending_lives.append((viewer, rect(region), scene.time, enter, camera,
-                                   rect(opens) if opens is not None else None, play))
+                                   rect(opens) if opens is not None else None, play, bool(view.get("playing"))))
 
 
 class Scene:
@@ -516,11 +516,14 @@ class Scene:
     def pause(self, duration: float = 1.0):
         return self.wait(duration, frozen_frame=True)
 
-    def next_slide(self, notes: str = "", **kwargs):
+    def next_slide(self, notes: str = "", loop: bool = False, **kwargs):
         """End the current step: the presentation pauses here. `notes` belong to
-        the step that starts here (as in manim-slides)."""
+        the step that starts here (as in manim-slides). With `loop`, the step ending
+        here replays from its start until the presenter moves on (→ goes straight to
+        the next step); a live view playing in it runs on the same wall clock, so an
+        animation one playback period long stays in step with it."""
         if self.time > self._slide_start and self.time != self._last_mark:
-            self._builder.mark(self.time, self._slide, self._notes)
+            self._builder.mark(self.time, self._slide, self._notes, loop)
             self._last_mark = self.time
             self._notes = notes
         else:

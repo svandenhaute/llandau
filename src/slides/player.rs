@@ -143,8 +143,23 @@ impl App<'_> {
         self.playing = Some((Instant::now(), self.time, target));
     }
 
+    /// Where step `step` starts: the previous step's mark (0 for the first).
+    fn step_start(&self, step: usize) -> f64 {
+        if step == 0 { 0.0 } else { self.timeline.marks.get(step - 1).map_or(0.0, |m| m.time) }
+    }
+
+    fn looping(&self, step: usize) -> bool {
+        self.timeline.marks.get(step).is_some_and(|m| m.looping)
+    }
+
     fn forward(&mut self) {
-        if let Some((_, _, target)) = self.playing.take() {
+        if self.looping(self.step) && self.step < self.last_step() {
+            // a looping step has no end to finish: on to the next step, from the looping step's end
+            self.playing = None;
+            self.time = self.mark(self.step);
+            self.step += 1;
+            self.play_to(self.mark(self.step));
+        } else if let Some((_, _, target)) = self.playing.take() {
             self.time = target; // finish the step at once
         } else if self.time < self.mark(self.step) - 1e-9 {
             self.play_to(self.mark(self.step)); // after scrubbing back
@@ -197,10 +212,26 @@ impl App<'_> {
     fn redraw(&mut self) {
         self.lives.zoom = self.zoom;
         if let Some((started, from, target)) = self.playing {
-            self.time = (from + started.elapsed().as_secs_f64()).min(target);
+            let time = from + started.elapsed().as_secs_f64();
+            self.time = time.min(target);
             if self.time >= target {
                 self.playing = None;
+                let end = self.mark(self.step);
+                if self.looping(self.step) && (target - end).abs() < 1e-9 {
+                    // around again from the step's start, the overshoot carried over: the loop's period is
+                    // exactly the step's length (a live view's playback, on the wall clock, stays in step)
+                    let start = self.step_start(self.step);
+                    let period = end - start;
+                    if period > 0.0 {
+                        self.time = start + (time - target).rem_euclid(period);
+                        self.play_to(end);
+                    }
+                }
             }
+        } else if self.looping(self.step) && (self.time - self.mark(self.step)).abs() < 1e-9 {
+            // resting at a looping step's end (stepped back onto it): it loops again
+            self.time = self.step_start(self.step);
+            self.play_to(self.mark(self.step));
         }
         if let Err(error) = self.lives.enter(self.py, self.timeline, self.time) {
             self.error = Some(error);
@@ -531,7 +562,7 @@ mod tests {
     use super::*;
 
     fn marks(slides: &[usize]) -> Vec<Mark> {
-        slides.iter().enumerate().map(|(i, &slide)| Mark { time: i as f64, slide, notes: String::new() }).collect()
+        slides.iter().enumerate().map(|(i, &slide)| Mark { time: i as f64, slide, notes: String::new(), looping: false }).collect()
     }
 
     #[test]

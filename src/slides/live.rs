@@ -83,6 +83,8 @@ pub struct Entry {
     pub camera: Option<Py<PyDict>>,
     /// keyframes (seconds from the step's start, a state dict) played on the step's clock
     pub play: Option<Vec<(f64, Py<PyDict>)>>,
+    /// the trajectory plays (looping) from the step's start, as P would start it
+    pub playing: bool,
 }
 
 struct Target {
@@ -265,6 +267,9 @@ impl Lives {
             });
             state.play = recording.map(|rec| (timeline.lives[span].span[0], rec));
             state.applied = None;
+            if entry.playing {
+                state.playback.set_playing(true);
+            }
         }
         Ok(())
     }
