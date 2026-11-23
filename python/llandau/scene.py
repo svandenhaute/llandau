@@ -307,12 +307,12 @@ class _Builder:
 
     def mark(self, t: float, slide: int, notes: str, loop: bool = False, paused: bool = False):
         self.slides.add_mark(t, slide, notes, loop, paused)
-        for viewer, rect, start, enter, camera, opens, play, playing, frame in self.pending_lives:
-            self.slides.add_live(viewer, rect, start, t, enter, camera, opens, play, playing, frame)
+        for viewer, rect, start, enter, camera, opens, play, playing, frame, round_ in self.pending_lives:
+            self.slides.add_live(viewer, rect, start, t, enter, camera, opens, play, playing, frame, round_)
         self.pending_lives = []
 
     def live(self, scene, name: str, theme: str, region, view: dict, opens=None, state: dict | None = None,
-             play: list | None = None):
+             play: list | None = None, round_: bool = False):
         """Show live scene `name` over `region` until the next mark: `state` (a state dict) then
         `view` (keywords) applied as it starts, `play` (keyframes) played on the step's clock;
         a click opens it up to `opens`."""
@@ -333,8 +333,9 @@ class _Builder:
             live.apply_view(v, view, camera=False)
 
         self.pending_lives.append((viewer, rect(region), scene.time, enter, camera,
-                                   rect(opens) if opens is not None else None, play, bool(view.get("playing")),
-                                   view.get("frame") if view.get("playing") else None))
+                                   rect(opens) if opens is not None else None, play,
+                                   None if view.get("playing") is None else bool(view["playing"]),
+                                   view.get("frame") if view.get("playing") else None, round_))
 
 
 class Scene:

@@ -149,6 +149,8 @@ pub struct LiveSpan {
     pub rect: [f32; 4],
     pub span: [f64; 2],
     pub opens: Option<[f32; 4]>,
+    /// drawn only inside the ellipse inscribed in its rectangle (a round view)
+    pub round: bool,
 }
 
 /// One step of the presentation: it ends at `time`, where the player pauses.
@@ -181,7 +183,7 @@ pub struct Timeline {
 pub enum Item<'a> {
     Shape { shape: Cow<'a, Shape>, id: Option<usize>, layer: Option<(usize, f32)> },
     Image(Placement),
-    Live { viewer: usize, rect: [f32; 4] },
+    Live { viewer: usize, rect: [f32; 4], round: bool },
 }
 
 /// Stroke width of the outline in Write, in frame units (manim: 2 × 0.01).
@@ -211,7 +213,7 @@ impl Timeline {
                 Some(item)
             })
             .collect();
-        items.extend(self.live_at(time).map(|i| Item::Live { viewer: self.lives[i].viewer, rect: self.lives[i].rect }));
+        items.extend(self.live_at(time).map(|i| Item::Live { viewer: self.lives[i].viewer, rect: self.lives[i].rect, round: self.lives[i].round }));
         items
     }
 

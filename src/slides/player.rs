@@ -221,9 +221,12 @@ impl App<'_> {
                 self.lives.pause(false);
             }
         }
-        // onto another slide: one that starts paused waits at its first step
+        // onto another slide: one that starts paused waits at the start of its first step (what
+        // the step plays, looping or not, then plays with P, or scrubs with the wheel)
         if self.slide_of(self.step) != slide && self.timeline.marks.get(self.step).is_some_and(|m| m.paused) {
-            self.freeze();
+            let target = self.playing.take().map(|(_, _, target)| target);
+            self.time = self.time.max(self.step_start(self.step) + 1e-6);
+            self.paused = Some(target);
         }
     }
 

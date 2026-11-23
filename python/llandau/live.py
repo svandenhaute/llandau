@@ -20,9 +20,11 @@ viewer.camera; the camera moves there smoothly over the first 0.9 s of the step)
 frame, style, sidechains, shading, fog, occlusion, coloring, scrub_discrete,
 show / hide (layer names), plots (True: the viewer's plots large under its
 3D view), and playing (True: the trajectory plays, looping, from the step's
-start, a frame per 33 ms (P pauses and resumes it with the slide); load it forward then backward to play it back and
-forth; with frame, it plays from that frame at the step's start, also when the
-step is entered later; without, it plays on from where it is). Consecutive steps of the same scene keep everything else, including
+start, a frame per 33 ms (P pauses and resumes it with the slide); load it
+forward then backward to play it back and forth; with frame, it plays from that
+frame at the step's start, also when the step is entered later; without, it
+plays on from where it is; False: it stops, on frame if given). Consecutive
+steps of the same scene keep everything else, including
 where the presenter turned it. On a slide, fog is 0 unless a view or state sets
 it (the explorer fogs large structures by default).
 

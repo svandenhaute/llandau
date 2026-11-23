@@ -458,10 +458,11 @@ impl Painter {
                     let first = quad(&mut image_vertices, placement.rect, placement.opacity);
                     commands.push(Command::Image { image: placement.image, first });
                 }
-                Item::Live { viewer, rect } => {
+                Item::Live { viewer, rect, round } => {
                     if self.live.contains_key(&viewer) {
                         let rect = self.live_rects.get(&viewer).copied().unwrap_or(rect);
-                        let first = quad(&mut image_vertices, rect, 1.0);
+                        // a negative opacity tells the shader to keep only the inscribed ellipse
+                        let first = quad(&mut image_vertices, rect, if round { -1.0 } else { 1.0 });
                         if self.live_top == Some(viewer) {
                             top = Some(Command::Live { viewer, first });
                         } else {

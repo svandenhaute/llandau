@@ -83,8 +83,9 @@ pub struct Entry {
     pub camera: Option<Py<PyDict>>,
     /// keyframes (seconds from the step's start, a state dict) played on the step's clock
     pub play: Option<Vec<(f64, Py<PyDict>)>>,
-    /// the trajectory plays (looping) from the step's start, as its play button would start it
-    pub playing: bool,
+    /// Some(true): the trajectory plays (looping) from the step's start, as its play button would
+    /// start it; Some(false): it stops (on the step's frame); None: it goes on as it was
+    pub playing: Option<bool>,
     /// with `playing`: the frame it plays from at the step's start; entered later (a looping step going on at
     /// the same phase), the frames due since then are skipped, so it plays as if it had started with the step
     pub frame: Option<usize>,
@@ -273,7 +274,10 @@ impl Lives {
             state.play = recording.map(|rec| (timeline.lives[span].span[0], rec));
             state.applied = None;
             state.held = false;
-            if entry.playing {
+            if entry.playing == Some(false) {
+                state.playback.set_playing(false);
+            }
+            if entry.playing == Some(true) {
                 if let Some(frame) = entry.frame {
                     let elapsed = (time - timeline.lives[span].span[0]).max(0.0);
                     let due = (elapsed / window::PLAY_INTERVAL.as_secs_f64()).floor() as usize;
@@ -615,6 +619,9 @@ impl Lives {
             return true;
         }
         let Some((_, viewer, _)) = self.under(timeline, time, size, self.cursor) else { return false };
+        if !zoom && self.states[viewer].play.is_some() {
+            return false; // a view playing a recording follows the step's clock: the wheel scrubs that
+        }
         let mut v = self.viewers[viewer].bind(py).borrow_mut();
         if zoom {
             v.zoom((-points * 0.004).exp());
@@ -696,7 +703,7 @@ mod tests {
     fn grid() -> Timeline {
         let mut timeline = Timeline { frame: [16.0, 9.0], ..Default::default() };
         for (k, cx) in [-4.0, 0.0, 4.0].into_iter().enumerate() {
-            timeline.lives.push(LiveSpan { viewer: k, rect: [cx, 0.0, 3.0, 2.0], span: [0.0, 10.0], opens: Some([0.0, 0.0, 12.0, 8.0]) });
+            timeline.lives.push(LiveSpan { viewer: k, rect: [cx, 0.0, 3.0, 2.0], span: [0.0, 10.0], opens: Some([0.0, 0.0, 12.0, 8.0]), round: false });
         }
         timeline
     }

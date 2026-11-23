@@ -12,6 +12,10 @@
 """
 from __future__ import annotations
 
+import builtins
+
+import numpy as np
+
 from .animation import AddTextLetterByLetter, Write, LaggedStart
 from .mobject import Group, DL, DR, ImageMobject, config
 from .scene import MIN_STEP, Scene
@@ -34,7 +38,7 @@ def typewrite(mob, **kwargs):
 class Deck(Scene):
     theme = DARK
     numbered = True           # False: no number shown and not counted (title slide, full-screen photos)
-    start_paused = False      # True: arriving from another slide, it waits paused at its first step (P plays)
+    start_paused = False      # True: arriving from another slide, it waits paused at its first step's start (P plays, the wheel scrubs)
     number: int | None = None  # assigned by order()
     run_time = 0.2             # default for reveal(anim=...)
 
@@ -82,7 +86,7 @@ class Deck(Scene):
         return mobs[0] if len(mobs) == 1 else Group(*mobs)
 
     def live(self, scene: str, region: Region | None = None, still: bool = True, opens: Region | None = None,
-             state=None, play=None, **view):
+             state=None, play=None, round: bool = False, **view):
         """The next step shows the 3D scene registered with @live_scene(scene) over region
         (default R.body), live and interactive in the player. Right after a reveal/step this only
         marks the upcoming step; otherwise it also ends the current one, so several calls in a row
@@ -99,6 +103,8 @@ class Deck(Scene):
                  view covers it). Returned, e.g. to replace it later; None without.
         opens    a click on the view opens it up to this region (e.g. R.body), over the other
                  views; the next click closes it. A drag still turns it.
+        round    only the ellipse (a circle in a square region) inscribed in the region is drawn: what
+                 is around it shows through (a frame drawn just outside it stays visible); the still too
         """
         _live.check(view)
         region = region if region is not None else R.body
@@ -108,7 +114,7 @@ class Deck(Scene):
         # ends the step as it is (no wait: no empty step), not after the live views' play: several
         # live() calls in a row share a step
         Scene.next_slide(self)
-        self._builder.live(self, scene, theme, region, view, opens, state, play)
+        self._builder.live(self, scene, theme, region, view, opens, state, play, round)
         # the step lasts as long as what plays on its clock: a recording, or the move to a camera
         if play:
             self._live_until = max(self._live_until, self.time + play[-1][0])
@@ -116,9 +122,17 @@ class Deck(Scene):
             self._live_until = max(self._live_until, self.time + _live.CAMERA_MOVE)
         if not still:
             return None
-        pixels = (round(2 * config.pixel_width * region.width / config.frame_width),
-                  round(2 * config.pixel_height * region.height / config.frame_height))
-        image = ImageMobject(_live.still(scene, theme, view, pixels, state, play))
+        pixels = (builtins.round(2 * config.pixel_width * region.width / config.frame_width),  # `round`: the view's
+                  builtins.round(2 * config.pixel_height * region.height / config.frame_height))
+        pixels_rgba = _live.still(scene, theme, view, pixels, state, play)
+        if round:  # the still cut to its inscribed ellipse, as the player draws it
+            h, w = pixels_rgba.shape[:2]
+            yy, xx = np.mgrid[:h, :w]
+            r = np.hypot((xx + 0.5) / w * 2 - 1, (yy + 0.5) / h * 2 - 1)
+            edge = 2.0 / min(w, h)
+            pixels_rgba = pixels_rgba.copy()
+            pixels_rgba[..., 3] = (pixels_rgba[..., 3] * np.clip((1 - r) / edge, 0, 1)).astype(pixels_rgba.dtype)
+        image = ImageMobject(pixels_rgba)
         place(image, region, fit="fill")
         self.add(image)
         return image

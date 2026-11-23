@@ -53,6 +53,12 @@ fn image_vs(@location(0) position: vec2<f32>, @location(1) uv: vec2<f32>, @locat
 @fragment
 fn image_fs(in: ImageOut) -> @location(0) vec4<f32> {
     let c = textureSample(image, image_sampler, in.uv);
+    if in.opacity < 0.0 {
+        // a round live view: only the ellipse inscribed in its rectangle, its edge antialiased
+        let r = length((in.uv - vec2(0.5)) * 2.0);
+        let w = max(fwidth(r), 1e-4);
+        return vec4(c.rgb, c.a * -in.opacity * (1.0 - smoothstep(1.0 - w, 1.0, r)));
+    }
     return vec4(c.rgb, c.a * in.opacity);
 }
 
