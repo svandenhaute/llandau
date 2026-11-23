@@ -650,6 +650,21 @@ impl Playback {
         self.due = 0.0;
     }
 
+    /// Stop playing, keeping the fraction of a frame due (see resume).
+    pub(crate) fn hold(&mut self) {
+        if let Some(last) = self.last.take() {
+            self.due += last.elapsed().as_secs_f64() / PLAY_INTERVAL.as_secs_f64() * self.speed;
+        }
+        self.playing = false;
+    }
+
+    /// Play on after hold, from the fraction of a frame it kept: what plays on the same
+    /// clock elsewhere (a deck's animation) stays in step.
+    pub(crate) fn resume(&mut self) {
+        self.playing = true;
+        self.last = Some(Instant::now());
+    }
+
     pub(crate) fn faster(&mut self) {
         self.speed = (self.speed * 2.0).min(MAX_SPEED);
     }

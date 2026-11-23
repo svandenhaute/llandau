@@ -47,7 +47,7 @@ const OVERLAY_HEIGHT: f32 = 600.0;
 /// deck's own.
 pub(crate) const KEYS: &[(&str, &str)] = &[
     ("", "Live view"),
-    ("P", "play / pause"),
+    ("P", "pause / resume the slide: its animations and every view (the panel: this view)"),
     ("[  ]", "play slower / faster"),
     (", .", "previous / next frame (Shift: 5%)"),
     ("D", "discrete states"),
@@ -83,7 +83,7 @@ pub struct Entry {
     pub camera: Option<Py<PyDict>>,
     /// keyframes (seconds from the step's start, a state dict) played on the step's clock
     pub play: Option<Vec<(f64, Py<PyDict>)>>,
-    /// the trajectory plays (looping) from the step's start, as P would start it
+    /// the trajectory plays (looping) from the step's start, as its play button would start it
     pub playing: bool,
     /// with `playing`: the frame it plays from at the step's start; entered later (a looping step going on at
     /// the same phase), the frames due since then are skipped, so it plays as if it had started with the step
@@ -108,6 +108,8 @@ struct State {
     /// the step's view at its end: what 0 goes back to
     home: Option<ViewState>,
     playback: Playback,
+    /// held by the slide's pause (P), to resume with it
+    held: bool,
     /// the vector lengths as the scene set them: the panel's sliders go to 4 x that
     initial_scales: Vec<(String, f32)>,
 }
@@ -270,6 +272,7 @@ impl Lives {
             });
             state.play = recording.map(|rec| (timeline.lives[span].span[0], rec));
             state.applied = None;
+            state.held = false;
             if entry.playing {
                 if let Some(frame) = entry.frame {
                     let elapsed = (time - timeline.lives[span].span[0]).max(0.0);
@@ -281,6 +284,20 @@ impl Lives {
             }
         }
         Ok(())
+    }
+
+    /// Hold every playing view (`paused`), or resume the views held; what a step starts
+    /// (entering a span) plays regardless.
+    pub fn pause(&mut self, paused: bool) {
+        for state in &mut self.states {
+            if paused && state.playback.playing {
+                state.playback.hold();
+                state.held = true;
+            } else if !paused && state.held {
+                state.playback.resume();
+                state.held = false;
+            }
+        }
     }
 
     /// Advance playing trajectories; whether anything moves.
@@ -418,7 +435,7 @@ impl Lives {
                                 ui.style_mut().visuals = egui::Visuals::dark();
                                 egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                                     ui.set_max_width(PANEL_WIDTH - 24.0);
-                                    frame_controls(ui, &mut v, &mut state.playback, "P");
+                                    frame_controls(ui, &mut v, &mut state.playback, ""); // P pauses the whole slide
                                     ui.separator();
                                     view_controls(ui, &mut v, &initial_scales, false);
                                     if !v.show_plots {
@@ -623,7 +640,6 @@ impl Lives {
         let mut v = self.viewers[viewer].bind(py).borrow_mut();
         let state = &mut self.states[viewer];
         match key {
-            "p" => state.playback.toggle(),
             "[" => state.playback.slower(),
             "]" => state.playback.faster(),
             "?" => self.help = !self.help,

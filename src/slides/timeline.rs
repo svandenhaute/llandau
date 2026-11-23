@@ -159,6 +159,8 @@ pub struct Mark {
     pub notes: String,
     /// the step ending here replays from its start until the presenter moves on
     pub looping: bool,
+    /// arriving from another slide, the step ending here waits paused at its start
+    pub paused: bool,
 }
 
 #[derive(Default)]

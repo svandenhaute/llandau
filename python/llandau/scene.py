@@ -305,8 +305,8 @@ class _Builder:
             kind, g = geometry
             self.slides.add_clip(kind, g, g, z, t0, t1, (t0, t0))
 
-    def mark(self, t: float, slide: int, notes: str, loop: bool = False):
-        self.slides.add_mark(t, slide, notes, loop)
+    def mark(self, t: float, slide: int, notes: str, loop: bool = False, paused: bool = False):
+        self.slides.add_mark(t, slide, notes, loop, paused)
         for viewer, rect, start, enter, camera, opens, play, playing, frame in self.pending_lives:
             self.slides.add_live(viewer, rect, start, t, enter, camera, opens, play, playing, frame)
         self.pending_lives = []
@@ -526,7 +526,9 @@ class Scene:
         looping steps of the same length keeps the phase: a dot looping in both goes
         on without a jump."""
         if self.time > self._slide_start and self.time != self._last_mark:
-            self._builder.mark(self.time, self._slide, self._notes, loop)
+            first = self._last_mark is None or self._last_mark <= self._slide_start
+            paused = first and getattr(self, "start_paused", False)
+            self._builder.mark(self.time, self._slide, self._notes, loop, paused)
             self._last_mark = self.time
             self._notes = notes
         else:

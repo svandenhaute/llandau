@@ -218,10 +218,11 @@ impl Slides {
 
     /// The end of a step: the presentation pauses at `time`. `slide` numbers
     /// the slide it belongs to; `notes` are the step's notes. With `looping`, the step
-    /// replays from its start until the presenter moves on.
-    #[pyo3(signature = (time, slide = 0, notes = String::new(), looping = false))]
-    fn add_mark(&mut self, time: f64, slide: usize, notes: String, looping: bool) {
-        self.timeline.marks.push(Mark { time, slide, notes, looping });
+    /// replays from its start until the presenter moves on. With `paused`, arriving from
+    /// another slide, the step waits paused at its start (P plays).
+    #[pyo3(signature = (time, slide = 0, notes = String::new(), looping = false, paused = false))]
+    fn add_mark(&mut self, time: f64, slide: usize, notes: String, looping: bool, paused: bool) {
+        self.timeline.marks.push(Mark { time, slide, notes, looping, paused });
     }
 
     /// (time, slide, notes) of each step.

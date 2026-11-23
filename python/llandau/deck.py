@@ -34,6 +34,7 @@ def typewrite(mob, **kwargs):
 class Deck(Scene):
     theme = DARK
     numbered = True           # False: no number shown and not counted (title slide, full-screen photos)
+    start_paused = False      # True: arriving from another slide, it waits paused at its first step (P plays)
     number: int | None = None  # assigned by order()
     run_time = 0.2             # default for reveal(anim=...)
 

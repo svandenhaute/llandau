@@ -68,6 +68,8 @@ struct App<'a> {
     time: f64,
     /// playing towards this time, from (instant, time) when it started
     playing: Option<(Instant, f64, f64)>,
+    /// paused (P): the time it was playing towards, if it was
+    paused: Option<Option<f64>>,
     last_scroll: Instant,
     closing: bool,
     error: Option<PyErr>,
@@ -102,6 +104,7 @@ pub fn play(
             step: start,
             time: 0.0,
             playing: None,
+            paused: None,
             last_scroll: Instant::now(),
             closing: false,
             error: None,
@@ -167,7 +170,90 @@ impl App<'_> {
         self.play_to(self.mark(step));
     }
 
+    /// P: freeze the slide (its clock, so its animations and looping steps, and every
+    /// playing live view), or let it all go on from where it stopped.
+    fn toggle_pause(&mut self) {
+        match self.paused.take() {
+            Some(target) => {
+                self.lives.pause(false);
+                if let Some(target) = target {
+                    self.play_to(target);
+                }
+            }
+            None => {
+                let target = self.playing.take().map(|(started, from, target)| {
+                    self.time = (from + started.elapsed().as_secs_f64()).min(target);
+                    target
+                });
+                self.lives.pause(true);
+                self.paused = Some(target);
+            }
+        }
+    }
+
+    /// Leaving the slide (or replaying) ends a pause: what plays next plays.
+    fn unpause(&mut self) {
+        if self.paused.take().is_some() {
+            self.lives.pause(false);
+        }
+    }
+
+    fn slide_of(&self, step: usize) -> usize {
+        self.timeline.marks.get(step).map_or(0, |m| m.slide)
+    }
+
+    /// A step move while paused: within the slide it stays paused (a looping step frozen
+    /// at the phase it was entered at, any other shown finished, the views a step starts
+    /// held as they enter); onto another slide the pause ends and it starts afresh.
+    fn move_paused(&mut self, step_move: impl FnOnce(&mut Self)) {
+        let slide = self.slide_of(self.step);
+        match self.paused.take() {
+            None => step_move(self),
+            Some(held) => {
+                // as if playing: the move takes the time it was playing towards into account
+                if let Some(target) = held {
+                    self.play_to(target);
+                }
+                step_move(self);
+                if self.slide_of(self.step) == slide {
+                    return self.freeze();
+                }
+                self.lives.pause(false);
+            }
+        }
+        // onto another slide: one that starts paused waits at its first step
+        if self.slide_of(self.step) != slide && self.timeline.marks.get(self.step).is_some_and(|m| m.paused) {
+            self.freeze();
+        }
+    }
+
+    /// Pause where the move left it: a looping step at its phase, any other finished (the
+    /// views it starts are held as they enter, in redraw).
+    fn freeze(&mut self) {
+        let target = self.playing.take().map(|(_, _, target)| target);
+        self.paused = Some(match target {
+            Some(target) if self.looping(self.step) => {
+                // arriving, the clock still rests at the previous step's end: frozen there, the
+                // previous step would stay on screen and the next key would skip this one
+                let start = self.step_start(self.step);
+                if self.time < start + 1e-6 {
+                    self.time = start + 1e-6;
+                }
+                Some(target)
+            }
+            Some(target) => {
+                self.time = target;
+                None
+            }
+            None => None,
+        });
+    }
+
     fn forward(&mut self) {
+        self.move_paused(Self::step_forward);
+    }
+
+    fn step_forward(&mut self) {
         if self.looping(self.step) && self.step < self.last_step() {
             // a looping step has no end to finish: on to the next step
             self.leave_loop_for(self.step + 1);
@@ -182,6 +268,10 @@ impl App<'_> {
     }
 
     fn back(&mut self) {
+        self.move_paused(Self::step_back);
+    }
+
+    fn step_back(&mut self) {
         if self.looping(self.step) && self.step > 0 && self.looping(self.step - 1) {
             self.leave_loop_for(self.step - 1);
             return;
@@ -197,6 +287,7 @@ impl App<'_> {
     }
 
     fn jump(&mut self, step: usize) {
+        self.unpause();
         self.playing = None;
         self.step = step.min(self.last_step());
         self.time = self.mark(self.step);
@@ -244,13 +335,16 @@ impl App<'_> {
                     }
                 }
             }
-        } else if self.looping(self.step) && (self.time - self.mark(self.step)).abs() < 1e-9 {
+        } else if self.paused.is_none() && self.looping(self.step) && (self.time - self.mark(self.step)).abs() < 1e-9 {
             // resting at a looping step's end (stepped back onto it): it loops again
             self.time = self.step_start(self.step);
             self.play_to(self.mark(self.step));
         }
         if let Err(error) = self.lives.enter(self.py, self.timeline, self.time) {
             self.error = Some(error);
+        }
+        if self.paused.is_some() {
+            self.lives.pause(true); // the views a step started while paused: held as they enter
         }
         let live_moving = self.lives.animate(self.py);
         let Some(target) = self.surface.as_mut() else { return };
@@ -428,7 +522,11 @@ impl App<'_> {
                     Some(_) => None,
                     None => Some(Fullscreen::Borderless(None)),
                 }),
-                "r" => self.replay(),
+                "r" => {
+                    self.unpause();
+                    self.replay()
+                }
+                "p" => self.toggle_pause(),
                 "q" => {
                     self.close(event_loop);
                     return;
@@ -578,7 +676,7 @@ mod tests {
     use super::*;
 
     fn marks(slides: &[usize]) -> Vec<Mark> {
-        slides.iter().enumerate().map(|(i, &slide)| Mark { time: i as f64, slide, notes: String::new(), looping: false }).collect()
+        slides.iter().enumerate().map(|(i, &slide)| Mark { time: i as f64, slide, notes: String::new(), looping: false, paused: false }).collect()
     }
 
     #[test]
