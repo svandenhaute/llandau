@@ -15,6 +15,8 @@ struct Instance {
     @location(4) end: vec3<f32>,
     @location(5) color_start: vec4<f32>,
     @location(6) color_end: vec4<f32>,
+    // 1: flat shading draws it without an outline (vector arrows)
+    @location(7) plain: f32,
 };
 
 struct VertexOut {
@@ -26,6 +28,7 @@ struct VertexOut {
     @location(4) color_end: vec4<f32>,
     @location(5) radius: f32,
     @location(6) axis: vec3<f32>,
+    @location(7) @interpolate(flat) plain: f32,
 };
 
 // a segment of a trail: consecutive points of a polyline, one color, the radius
@@ -36,7 +39,7 @@ struct TrailInstance {
     @location(5) color: vec4<f32>,
 };
 
-fn lathe(vertex: Vertex, start: vec3<f32>, end: vec3<f32>, r: f32, color_start: vec4<f32>, color_end: vec4<f32>) -> VertexOut {
+fn lathe(vertex: Vertex, start: vec3<f32>, end: vec3<f32>, r: f32, color_start: vec4<f32>, color_end: vec4<f32>, plain: f32) -> VertexOut {
     let axis = end - start;
     let length = max(length(axis), 1e-6);
     let w = axis / length;
@@ -60,17 +63,18 @@ fn lathe(vertex: Vertex, start: vec3<f32>, end: vec3<f32>, r: f32, color_start: 
     out.color_end = color_end;
     out.radius = r;
     out.axis = (g.view * vec4(w, 0.0)).xyz;
+    out.plain = plain;
     return out;
 }
 
 @vertex
 fn vs(vertex: Vertex, instance: Instance) -> VertexOut {
-    return lathe(vertex, instance.start, instance.end, instance.radius, instance.color_start, instance.color_end);
+    return lathe(vertex, instance.start, instance.end, instance.radius, instance.color_start, instance.color_end, instance.plain);
 }
 
 @vertex
 fn vs_trail(vertex: Vertex, instance: TrailInstance) -> VertexOut {
-    return lathe(vertex, instance.start, instance.end, g.viewport.z, instance.color, instance.color);
+    return lathe(vertex, instance.start, instance.end, g.viewport.z, instance.color, instance.color, 0.0);
 }
 
 @fragment
@@ -88,7 +92,8 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
         let facing = dot(around, eye) / max(length(around) * length(eye), 1e-6);
         let across = sqrt(max(1.0 - facing * facing, 0.0));
         let pixels = (1.0 - across) * in.radius / pixel_size(in.position.z);
-        let flat = mix(linear(color.rgb), linear(g.outline.rgb), outline(pixels, in.position.z));
+        let edge = select(outline(pixels, in.position.z), 0.0, in.plain > 0.5);
+        let flat = mix(linear(color.rgb), linear(g.outline.rgb), edge);
         return vec4(fog(flat, in.position.z), color.a);
     }
     return vec4(fog(shade(linear(color.rgb), normal, to_eye), in.position.z), color.a);

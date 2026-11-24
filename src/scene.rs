@@ -32,14 +32,21 @@ pub struct LatheInstance {
     pub start: [f32; 3],
     pub radius: f32,
     pub end: [f32; 3],
-    pub _pad: f32,
+    /// 1: flat shading draws it without an outline (vector arrows); 0 otherwise
+    pub plain: f32,
     pub color_start: Rgba,
     pub color_end: Rgba,
 }
 
 impl LatheInstance {
     pub fn new(start: Vec3, end: Vec3, radius: f32, color_start: Rgba, color_end: Rgba) -> Self {
-        Self { start: start.to_array(), radius, end: end.to_array(), _pad: 0.0, color_start, color_end }
+        Self { start: start.to_array(), radius, end: end.to_array(), plain: 0.0, color_start, color_end }
+    }
+
+    /// Without an outline in flat shading: arrows read as plain marks over the outlined atoms.
+    pub fn plain(mut self) -> Self {
+        self.plain = 1.0;
+        self
     }
 }
 
@@ -523,8 +530,8 @@ impl Scene {
         let r = self.arrow_radius;
         let head = (8.0 * r).min(0.45 * length);
         let base = start + vector * (1.0 - head / length);
-        out.tubes.push(LatheInstance::new(start, base, r, color, color));
-        out.cones.push(LatheInstance::new(base, start + vector, 2.6 * r, color, color));
+        out.tubes.push(LatheInstance::new(start, base, r, color, color).plain());
+        out.cones.push(LatheInstance::new(base, start + vector, 2.6 * r, color, color).plain());
     }
 
     /// Atoms and bonds, or the protein view, of one set of positions.

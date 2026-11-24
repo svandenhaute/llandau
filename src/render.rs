@@ -551,6 +551,7 @@ impl Renderer {
             attribute(4, 16, wgpu::VertexFormat::Float32x3),
             attribute(5, 32, wgpu::VertexFormat::Float32x4),
             attribute(6, 48, wgpu::VertexFormat::Float32x4),
+            attribute(7, 28, wgpu::VertexFormat::Float32), // LatheInstance's flag: no outline in flat shading
         ];
         let sphere_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<SphereInstance>() as u64,
