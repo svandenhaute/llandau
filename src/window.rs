@@ -56,7 +56,7 @@ pub(crate) const KEYS: &[(&str, &str)] = &[
     ("", "Trajectory"),
     ("Space  P", "play / pause"),
     ("[  ]", "play slower / faster"),
-    ("← →  , .", "previous / next frame (Shift: 5%)"),
+    ("← →  , .", "previous / next frame (Shift: arrows 5%, comma / period the first / last)"),
     ("Home  End", "first / last frame"),
     ("D", "discrete states"),
     ("", "View"),
@@ -239,12 +239,13 @@ impl Scrub {
 /// The 3D view's egui-independent keys, shared with live views: frames, discrete
 /// states, zoom, the camera, the look, layers, the plots. True when `key` is one.
 pub(crate) fn view_key(v: &mut Viewer, key: char, shift: bool) -> bool {
-    // shift: jump 5% of the trajectory (at least 10 frames)
+    // shift + comma / period: the first / last frame
     let count = v.num_frames().max(1) as i64;
-    let jump = if shift { (count / 20).max(10) } else { 1 };
     match key {
-        ',' | '<' => step_frames(v, -jump),
-        '.' | '>' => step_frames(v, jump),
+        ',' | '<' if shift => step_frames(v, -count),
+        '.' | '>' if shift => step_frames(v, count),
+        ',' | '<' => step_frames(v, -1),
+        '.' | '>' => step_frames(v, 1),
         'd' => drop(v.set_scrub_discrete(!v.scene.scrub_discrete)),
         '0' => v.reset_camera(),
         '+' | '=' => v.zoom(1.0 / ZOOM_STEP),
@@ -515,9 +516,11 @@ impl App<'_> {
             self.playback.faster();
         }
         let count = v.num_frames().max(1) as i64;
-        for (key, c) in [(Key::ArrowLeft, ','), (Key::ArrowRight, '.')] {
+        // the arrows step like , and . (shift: 5%), but shift + left is not the first frame (Home is)
+        let jump = if shift { (count / 20).max(10) } else { 1 };
+        for (key, step) in [(Key::ArrowLeft, -jump), (Key::ArrowRight, jump)] {
             if pressed(key) {
-                view_key(v, c, shift);
+                step_frames(v, step);
             }
         }
         for (key, step) in [(Key::Home, -count), (Key::End, count)] {

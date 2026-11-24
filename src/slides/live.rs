@@ -49,7 +49,7 @@ pub(crate) const KEYS: &[(&str, &str)] = &[
     ("", "Live view"),
     ("P", "pause / resume the slide: its animations and every view (the panel: this view)"),
     ("[  ]", "play slower / faster"),
-    (", .", "previous / next frame (Shift: 5%)"),
+    (", .", "previous / next frame (Shift: first / last)"),
     ("D", "discrete states"),
     ("drag", "rotate (right or Shift: pan)"),
     ("wheel", "scrub frames (pinch or Ctrl: zoom)"),
